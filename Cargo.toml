@@ -2,6 +2,10 @@
 name = "lazylibrarian"
 version = "0.1.0"
 edition = "2021"
+description = "LazyLibrarian book (ebook/audiobook) downloader & manager — orca service-backend"
+
+[package.metadata.orca]
+category = "downloads"
 
 [lib]
 name = "lazylibrarian"
