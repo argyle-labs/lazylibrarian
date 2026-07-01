@@ -1,15 +1,19 @@
-# lazylibrarian — ServiceBackend contract checklist
+# lazylibrarian — ServiceBackend contract
 
-Pure-Rust plugin: **no bash, no compose, no provision scripts**. Driven by the
-generic `service.*` surface (no per-plugin tools). Modalities: **docker,podman,lxc**.
+Pure-Rust plugin (**no bash/compose/provision scripts**) driven by the single
+generic `service.*` surface — no per-plugin tools. Runtimes: **docker,podman,lxc**.
 
-## What this plugin implements (the only per-plugin work)
-- [ ] `provider` / `runtimes` / `default_port` / `capabilities` / `data_paths` — declarative
-- [ ] `workload_spec(runtime)` — *what* to run; `deploy_target` renders it to compose/LXC/VM
-- [ ] `configure` — service-specific config via the upstream API
-- [ ] `status` — health/diagnostics
+## Per-plugin code (the only work this repo owns)
+- [x] `provider` / `runtimes` / `default_port` / `capabilities` / `data_paths` — declarative descriptor
+- [ ] `workload_spec(runtime)` — *what* to run; `deploy_target` renders it to a container / LXC / VM
+- [ ] `configure` — apply lazylibrarian config via its upstream API
+- [ ] `status` — health + rich diagnostics returned in the typed `ServiceStatus.info`
 
-## Inherited generically (NO code in this plugin)
+> Declarative descriptor is implemented and the plugin **registers + loads live**
+> in orca today (`service.list` shows it). `workload_spec`/`configure`/`status`
+> are being filled in per plugin.
+
+## Provided generically by orca (NO code here)
 - `deploy` — `service.deploy` → `deploy_target.launch(WorkloadSpec)`
-- `backup` / `restore` — pluggable `BackupMethod` (tar for containers/LXC, **PBS** for Proxmox guests when available)
-- `connect` / `sync` — endpoint registry + peer sync in the toolkit
+- `backup` / `restore` — pluggable `BackupMethod` (tar; **PBS** for Proxmox guests)
+- single `service.*` tool surface, exposed over CLI / REST / MCP
