@@ -14,7 +14,7 @@ This repo is **self-contained** — the steps below run lazylibrarian **by hand,
 
 ## Run it without orca
 
-### Docker / Podman
+### Docker Compose
 
 ```yaml
 # compose.yml
@@ -35,7 +35,24 @@ services:
 docker compose up -d
 ```
 
-Podman: the same file with `podman-compose up -d`.
+### Other runtimes
+
+**Podman** — the compose above works with `podman compose up -d`, or run it directly:
+
+```sh
+podman run -d --name lazylibrarian --restart unless-stopped \
+    -p 5299:5299/tcp \
+    -v ./config:/config \
+    -v /path/to/books:/books \
+    -v /path/to/downloads:/downloads \
+    lscr.io/linuxserver/lazylibrarian:latest
+```
+
+**LXC** — on a container-capable LXC (e.g. a Proxmox LXC with nesting enabled) run the same image via Docker/Podman as above, or install lazylibrarian from upstream directly on the guest: <https://gitlab.com/LazyLibrarian/LazyLibrarian>.
+
+**VM** — install lazylibrarian from upstream (<https://gitlab.com/LazyLibrarian/LazyLibrarian>) or run the same container image inside the VM; expose port `5299`.
+
+**Unraid** — add via *Community Applications*, or *Docker → Add Container* with image `lscr.io/linuxserver/lazylibrarian:latest`, port `5299`, and the volume paths above.
 
 ### Ports & data
 
