@@ -1,0 +1,26 @@
+# LazyLibrarian - Ebook and Audiobook Manager
+# docs: ../../docs/services/lazylibrarian.md
+
+services:
+  lazylibrarian:
+    image: lscr.io/linuxserver/lazylibrarian:${LAZYLIBRARIAN_IMAGE_TAG:-latest}
+    container_name: lazylibrarian
+    environment:
+      - PUID=${PUID:-99}
+      - PGID=${PGID:-100}
+      - TZ=${TZ:-America/Denver}
+      - DOCKER_MODS=linuxserver/mods:universal-calibre|linuxserver/mods:lazylibrarian-ffmpeg
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5299"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    ports:
+      - "${LAZYLIBRARIAN_PORT:-5299}:5299"
+    volumes:
+      - ${LAZYLIBRARIAN_CONFIG_PATH:-/opt/appdata/lazylibrarian}:/config
+      - ${DOWNLOADS_PATH:-/mnt/pool/downloads}:/downloads
+      - ${MEDIA_PATH:-/mnt/pool/data/media}/books:/data/media/books
+      - ${MEDIA_PATH:-/mnt/pool/data/media}/audiobooks:/data/media/audiobooks
+    restart: unless-stopped
