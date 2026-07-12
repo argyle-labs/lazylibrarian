@@ -1,0 +1,39 @@
+name: Release
+
+# Thin caller: the whole release flow lives ONCE in the org reusable
+# argyle-labs/.github → .github/workflows/plugin-release.yml. This repo just
+# forwards the manual dispatch inputs. See that file for version math + artifact
+# staging (plugin binary + sha256, built against orca `main`).
+#   Actions → Release → Run workflow → channel (rc | stable) + bump.
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Release channel: rc (prerelease) or stable"
+        required: true
+        type: choice
+        options: [rc, stable]
+        default: rc
+      bump:
+        description: "Version bump from latest stable tag"
+        required: true
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      notes:
+        description: "Extra release notes (optional)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: argyle-labs/.github/.github/workflows/plugin-release.yml@main
+    secrets: inherit
+    with:
+      channel: ${{ inputs.channel }}
+      bump: ${{ inputs.bump }}
+      notes: ${{ inputs.notes }}
