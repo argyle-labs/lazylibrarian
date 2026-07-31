@@ -17,7 +17,7 @@ name = "lazylibrarian"
 path = "src/main.rs"
 
 # lazylibrarian is a BACKEND-ONLY orca plugin: zero #[orca_tool]s. It registers a
-# ServiceBackend across the cdylib FFI seam and reaches the whole orca system
+# ServiceBackend over the orca socket and reaches the whole orca system
 # through plugin-toolkit alone.
 [dependencies]
 plugin-toolkit = { git = "https://github.com/argyle-labs/orca", branch = "main" }
