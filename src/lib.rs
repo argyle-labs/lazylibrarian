@@ -1,4 +1,4 @@
-//! lazylibrarian service backend — LazyLibrarian book (ebook/audiobook) downloader & manager.
+//! lazylibrarian service backend — LazyLibrarian ebook/audiobook library manager.
 //!
 //! Implements `ServiceBackend` so the generic `service.*` tools
 //! (deploy/backup/restore/configure/status/connect/sync) drive lazylibrarian. No
