@@ -4,7 +4,7 @@
 
 # lazylibrarian
 
-LazyLibrarian finds, downloads, and manages ebooks and audiobooks.
+LazyLibrarian finds, imports, and organizes ebooks and audiobooks.
 
 A first-party [orca](https://github.com/argyle-labs/orca) plugin (service-backend).
 
