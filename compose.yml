@@ -23,4 +23,8 @@ services:
       - ${DOWNLOADS_PATH:-/mnt/pool/downloads}:/downloads
       - ${MEDIA_PATH:-/mnt/pool/data/media}/books:/data/media/books
       - ${MEDIA_PATH:-/mnt/pool/data/media}/audiobooks:/data/media/audiobooks
+      # Pins the LazyLibrarian app source to a known-good upstream commit on every
+      # start (the image ships a stale checkout whose in-app updater is a no-op).
+      # See custom-cont-init.d/99-ll-source-update.sh.
+      - ./custom-cont-init.d:/custom-cont-init.d:ro
     restart: unless-stopped
