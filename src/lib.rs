@@ -373,4 +373,88 @@ mod tests {
         assert_eq!(item.title, "The Way of Kings");
         assert_eq!(item.status.as_deref(), Some("Open"));
     }
+
+    // ── Integration: LlClient against a mock LazyLibrarian server ──────────────
+    // Exercises the real /api?apikey=&cmd= path — query params (apikey, cmd,
+    // name, id, type), the bare-array-vs-{data:[]} decode, and the mutation
+    // status — without the endpoint db.
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn cfg(uri: String) -> LlConfig {
+        LlConfig {
+            base_url: uri,
+            api_key: "KEY".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn list_reads_getallbooks_with_apikey() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .and(query_param("apikey", "KEY"))
+            .and(query_param("cmd", "getAllBooks"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"BookID": "GB1", "BookName": "Elantris", "Status": "Have"}
+            ])))
+            .mount(&server)
+            .await;
+        let c = cfg(server.uri());
+        let items = LlClient::new(&c)
+            .get_books("getAllBooks", &[])
+            .await
+            .unwrap()
+            .into_iter()
+            .map(LlBook::into_item)
+            .collect::<Vec<_>>();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "GB1");
+        assert_eq!(items[0].title, "Elantris");
+        assert_eq!(items[0].status.as_deref(), Some("Have"));
+    }
+
+    #[tokio::test]
+    async fn search_passes_name_and_decodes_data_wrapper() {
+        let server = MockServer::start().await;
+        // findBook with the search term; response wrapped in {data:[...]}.
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .and(query_param("cmd", "findBook"))
+            .and(query_param("name", "The Way of Kings"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"bookid": "GB9", "bookname": "The Way of Kings"}]
+            })))
+            .mount(&server)
+            .await;
+        let c = cfg(server.uri());
+        let books = LlClient::new(&c)
+            .get_books("findBook", &[("name", "The Way of Kings")])
+            .await
+            .unwrap();
+        // lowercase findBook field aliases resolve.
+        assert_eq!(books.len(), 1);
+        let item = books.into_iter().next().unwrap().into_item();
+        assert_eq!(item.id, "GB9");
+        assert_eq!(item.title, "The Way of Kings");
+    }
+
+    #[tokio::test]
+    async fn library_add_queues_with_id_and_type() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .and(query_param("cmd", "queueBook"))
+            .and(query_param("id", "GB1"))
+            .and(query_param("type", "AudioBook"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let c = cfg(server.uri());
+        let status = LlClient::new(&c)
+            .api("queueBook", &[("id", "GB1"), ("type", "AudioBook")])
+            .await
+            .unwrap();
+        assert_eq!(status, 200);
+    }
 }

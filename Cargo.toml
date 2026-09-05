@@ -26,6 +26,7 @@ plugin-toolkit = { git = "https://github.com/argyle-labs/orca", tag = "v0.1.9-rc
 plugin-toolkit = { git = "https://github.com/argyle-labs/orca", tag = "v0.1.9-rc.29" }
 tokio    = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
+wiremock = "0.6"
 
 [lints.clippy]
 let_underscore_must_use = "deny"
