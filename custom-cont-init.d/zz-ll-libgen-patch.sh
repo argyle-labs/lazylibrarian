@@ -15,9 +15,12 @@
 #   4. Download-link picker took the first anchor and required http:// -> scan
 #      all anchors for the relative get.php?...&key=... link and resolve it.
 #
-# Runs as root via linuxserver's /custom-cont-init.d. Filename sorts AFTER
-# 99-ll-source-update.sh so it patches the freshly-pinned source. Idempotent and
-# fail-safe: on any error it leaves the source as-is and never blocks start.
+# Runs as root via linuxserver's /custom-cont-init.d, in ascending filename
+# order. NOTE: the collation ignores the hyphen, so a "99b-" name would sort
+# BEFORE "99-ll-source-update.sh" (b < l) and get its patches wiped by the
+# source pin. A letter prefix ("zz-") sorts after any "99-" script, so this
+# always runs AFTER the source is pinned. Idempotent and fail-safe: on any
+# error it leaves the source as-is and never blocks container start.
 set -uo pipefail
 
 APP="/app/lazylibrarian/lazylibrarian"
