@@ -7,12 +7,12 @@
 #![allow(clippy::disallowed_types)]
 
 use plugin_toolkit::service::{
-    BoxFuture, Endpoint, Runtime, ServiceBackend, ServiceCapability, ServiceError, ServiceStatus,
+    BoxFuture, Routes, Runtime, ServiceBackend, ServiceCapability, ServiceError, ServiceStatus,
     WorkloadSpec,
 };
 
-/// lazylibrarian backend. Holds only the provider name; per-instance endpoint/creds
-/// come from the `Endpoint` the generic `service.*` tools hand each op.
+/// lazylibrarian backend. Holds only the provider name; per-instance routes/creds
+/// come from the `Routes` the generic `service.*` tools hand each op.
 #[derive(Debug, Clone)]
 pub struct LazylibrarianBackend {
     provider: &'static str,
@@ -61,7 +61,8 @@ impl ServiceBackend for LazylibrarianBackend {
     fn workload_spec<'a>(
         &'a self,
         _runtime: Runtime,
-        _ep: &'a Endpoint,
+        _instance: &'a str,
+        _routes: &'a Routes,
     ) -> BoxFuture<'a, Result<WorkloadSpec, ServiceError>> {
         // TODO: describe the lazylibrarian workload (image/template, ports, mounts,
         // env) for the chosen runtime. The deploy target turns this into a
@@ -71,7 +72,8 @@ impl ServiceBackend for LazylibrarianBackend {
 
     fn configure<'a>(
         &'a self,
-        _ep: &'a Endpoint,
+        _instance: &'a str,
+        _routes: &'a Routes,
         _config: &'a str,
     ) -> BoxFuture<'a, Result<(), ServiceError>> {
         // TODO: apply lazylibrarian-specific config idempotently.
@@ -80,7 +82,8 @@ impl ServiceBackend for LazylibrarianBackend {
 
     fn status<'a>(
         &'a self,
-        _ep: &'a Endpoint,
+        _instance: &'a str,
+        _routes: &'a Routes,
     ) -> BoxFuture<'a, Result<ServiceStatus, ServiceError>> {
         // TODO: real health/diagnostics.
         Box::pin(async move { Err(ServiceError::unimplemented("lazylibrarian.status")) })
@@ -320,6 +323,7 @@ impl LlBook {
             id: self.book_id,
             title: self.book_name,
             status: self.status,
+            path: None,
         }
     }
 }
