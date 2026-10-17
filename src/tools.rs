@@ -7,8 +7,16 @@ use crate::parity::{self, ParityRow};
 pub async fn connect(name: &str) -> Result<Ll> {
     let api_key = plugin_toolkit::secrets::resolve_scoped("lazylibrarian", name, "api_key")?;
     let row = endpoint_db::require(name)?;
+    require_routes(name, &row.routes)?;
     let base_url = route::resolve_reachable(name, &row.routes, false).await?;
     Ok(Ll::new(&base_url, api_key.expose_secret()))
+}
+
+pub fn require_routes<T>(name: &str, routes: &[T]) -> Result<()> {
+    if routes.is_empty() {
+        bail!("endpoint {name} has no routes; set routes (base_url is no longer used)");
+    }
+    Ok(())
 }
 
 #[derive(
@@ -39,6 +47,13 @@ impl Format {
             Format::Ebook => &["eBook"],
             Format::Audiobook => &["AudioBook"],
             Format::Both => &["eBook", "AudioBook"],
+        }
+    }
+
+    pub fn singles(self) -> Vec<Format> {
+        match self {
+            Format::Both => vec![Format::Ebook, Format::Audiobook],
+            f => vec![f],
         }
     }
 }
@@ -77,6 +92,9 @@ pub struct BooksArgs {
     /// Only books by this author id.
     #[arg(long)]
     pub author_id: Option<String>,
+    /// Return at most this many books (upstream `limit`, applied before the author filter).
+    #[arg(long)]
+    pub limit: Option<u32>,
 }
 
 pub async fn list_books(ll: &Ll, args: &BooksArgs) -> Result<Vec<Book>> {
@@ -89,6 +107,10 @@ pub async fn list_books(ll: &Ll, args: &BooksArgs) -> Result<Vec<Book>> {
     }
     if let Some(s) = &args.audio_status {
         params.push(("audiostatus", s.as_str()));
+    }
+    let limit = args.limit.map(|n| n.to_string());
+    if let Some(n) = &limit {
+        params.push(("limit", n.as_str()));
     }
     let mut books = ll.books(&params).await?;
     if let Some(id) = &args.author_id {
@@ -139,10 +161,17 @@ pub struct WantArgs {
 
 #[orca_struct]
 #[derive(Debug, Clone, PartialEq)]
-pub struct WantReport {
+pub struct WantResult {
+    pub id: String,
     pub format: Format,
-    pub wanted: Vec<String>,
-    pub failed: Vec<Failure>,
+    pub wanted: bool,
+    pub error: Option<String>,
+}
+
+#[orca_struct]
+#[derive(Debug, Clone, PartialEq)]
+pub struct WantReport {
+    pub results: Vec<WantResult>,
 }
 
 pub async fn want_books(ll: &Ll, args: &WantArgs) -> Result<WantReport> {
@@ -153,24 +182,17 @@ pub async fn want_books(ll: &Ll, args: &WantArgs) -> Result<WantReport> {
         check_id(id)?;
     }
     let mut report = WantReport {
-        format: args.format,
-        wanted: Vec::new(),
-        failed: Vec::new(),
+        results: Vec::new(),
     };
     for id in &args.book_ids {
-        let mut result = Ok(());
-        for ty in args.format.ll_types() {
-            result = ll.queue_book(id, ty).await;
-            if result.is_err() {
-                break;
-            }
-        }
-        match result {
-            Ok(()) => report.wanted.push(id.clone()),
-            Err(e) => report.failed.push(Failure {
+        for format in args.format.singles() {
+            let result = ll.queue_book(id, format.ll_types()[0]).await;
+            report.results.push(WantResult {
                 id: id.clone(),
-                error: format!("{e:#}"),
-            }),
+                format,
+                wanted: result.is_ok(),
+                error: result.err().map(|e| format!("{e:#}")),
+            });
         }
     }
     Ok(report)
@@ -247,14 +269,42 @@ pub struct ScanArgs {
     pub author_id: Option<String>,
 }
 
-pub async fn scan_library(ll: &Ll, args: &ScanArgs) -> Result<StartedReport> {
-    for ty in args.format.ll_types() {
-        ll.scan(ty, args.author_id.as_deref()).await?;
+#[orca_struct]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScanReport {
+    pub started: Vec<Format>,
+    pub failed: Vec<Failure>,
+}
+
+pub async fn scan_library(ll: &Ll, args: &ScanArgs) -> Result<ScanReport> {
+    let mut report = ScanReport {
+        started: Vec::new(),
+        failed: Vec::new(),
+    };
+    for format in args.format.singles() {
+        match ll
+            .scan(format.ll_types()[0], args.author_id.as_deref())
+            .await
+        {
+            Ok(()) => report.started.push(format),
+            Err(e) => report.failed.push(Failure {
+                id: format!("{format:?}").to_lowercase(),
+                error: format!("{e:#}"),
+            }),
+        }
     }
-    Ok(StartedReport {
-        format: args.format,
-        started: true,
-    })
+    if report.started.is_empty() {
+        bail!(
+            "no scan started: {}",
+            report
+                .failed
+                .iter()
+                .map(|f| f.error.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    Ok(report)
 }
 
 /// Rescan the ebook and/or audiobook library (`forceLibraryScan`,
@@ -265,13 +315,23 @@ pub async fn scan_library(ll: &Ll, args: &ScanArgs) -> Result<StartedReport> {
     role = "admin",
     execute_gated = true
 )]
-async fn lazylibrarian_library_scan(args: ScanArgs, _ctx: &ToolCtx) -> Result<StartedReport> {
+async fn lazylibrarian_library_scan(args: ScanArgs, _ctx: &ToolCtx) -> Result<ScanReport> {
     scan_library(&connect(&args.name).await?, &args).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_routes_give_a_clear_error() {
+        let e = require_routes::<String>("ll", &[]).unwrap_err().to_string();
+        assert_eq!(
+            e,
+            "endpoint ll has no routes; set routes (base_url is no longer used)"
+        );
+        assert!(require_routes("ll", &["http://ll.test".to_string()]).is_ok());
+    }
 
     #[test]
     fn formats_map_to_upstream_types() {

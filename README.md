@@ -93,6 +93,14 @@ need `admin`; writes run when called and accept `dryRun` for a preview.
 | `lazylibrarian.wanted.search` | `forceBookSearch` |
 | `lazylibrarian.library.scan` | `forceLibraryScan`, `forceAudioBookScan` |
 
+`books.list` takes `limit`. `parity.list` and the media `units` read the whole
+`getAllBooks` table: upstream offers `limit` without an offset, so a partial read
+would silently drop books from the report.
+
+**Upgrading from an older endpoint:** `base_url` and the inline `api_key` are gone.
+Set the endpoint's routes and store the key as its `api_key` secret; an endpoint
+without routes fails with `endpoint <name> has no routes`.
+
 The media facet registers as the ebook and audiobook acquirer (`list`, `search`,
 `library_add`, `units`).
 

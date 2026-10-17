@@ -460,6 +460,7 @@ mod tests {
                     status: Some("Wanted".into()),
                     audio_status: Some("Skipped".into()),
                     author_id: Some("A1".into()),
+                    limit: Some(50),
                 };
                 let got = block(tools::list_books(&ll(), &args)).unwrap();
                 assert_eq!(got.len(), 1);
@@ -468,7 +469,7 @@ mod tests {
         );
         assert_eq!(
             calls,
-            vec!["cmd=getAllBooks&status=Wanted&audiostatus=Skipped"]
+            vec!["cmd=getAllBooks&status=Wanted&audiostatus=Skipped&limit=50"]
         );
     }
 
@@ -476,7 +477,7 @@ mod tests {
     fn want_both_queues_each_format_and_reports_failures() {
         let calls = serve(
             |q| {
-                if q.contains("id=BAD") {
+                if q.contains("id=BAD&type=AudioBook") {
                     Some((200, "Invalid id: BAD".to_string()))
                 } else {
                     ok_route(q)
@@ -489,18 +490,28 @@ mod tests {
                     format: tools::Format::Both,
                 };
                 let r = block(tools::want_books(&ll(), &args)).unwrap();
-                assert_eq!(r.wanted, vec!["B1"]);
-                assert_eq!(r.failed[0].id, "BAD");
+                let got: Vec<(&str, tools::Format, bool)> = r
+                    .results
+                    .iter()
+                    .map(|x| (x.id.as_str(), x.format, x.wanted))
+                    .collect();
+                assert_eq!(
+                    got,
+                    vec![
+                        ("B1", tools::Format::Ebook, true),
+                        ("B1", tools::Format::Audiobook, true),
+                        ("BAD", tools::Format::Ebook, true),
+                        ("BAD", tools::Format::Audiobook, false),
+                    ]
+                );
+                assert!(r.results[3]
+                    .error
+                    .as_deref()
+                    .unwrap()
+                    .contains("Invalid id"));
             },
         );
-        assert_eq!(
-            calls,
-            vec![
-                "cmd=queueBook&id=B1&type=eBook",
-                "cmd=queueBook&id=B1&type=AudioBook",
-                "cmd=queueBook&id=BAD&type=eBook",
-            ]
-        );
+        assert_eq!(calls.len(), 4);
     }
 
     #[test]
@@ -551,12 +562,102 @@ mod tests {
                 format: tools::Format::Both,
                 author_id: Some("A1".into()),
             };
-            block(tools::scan_library(&ll(), &args)).unwrap();
+            let r = block(tools::scan_library(&ll(), &args)).unwrap();
+            assert_eq!(
+                r.started,
+                vec![tools::Format::Ebook, tools::Format::Audiobook]
+            );
         });
         assert_eq!(
             calls,
             vec!["cmd=forceLibraryScan&id=A1", "cmd=forceAudioBookScan&id=A1"]
         );
+    }
+
+    fn scan_args() -> tools::ScanArgs {
+        tools::ScanArgs {
+            name: "ll".into(),
+            format: tools::Format::Both,
+            author_id: None,
+        }
+    }
+
+    #[test]
+    fn scan_both_reports_a_partial_start() {
+        serve(
+            |q| {
+                if q.starts_with("cmd=forceAudioBookScan") {
+                    Some((500, "boom".to_string()))
+                } else {
+                    ok_route(q)
+                }
+            },
+            || {
+                let r = block(tools::scan_library(&ll(), &scan_args())).unwrap();
+                assert_eq!(r.started, vec![tools::Format::Ebook]);
+                assert_eq!(r.failed[0].id, "audiobook");
+                assert!(r.failed[0].error.contains("HTTP 500"), "{:?}", r.failed);
+            },
+        );
+    }
+
+    #[test]
+    fn scan_fails_when_no_format_starts() {
+        serve(
+            |_| Some((500, "boom".to_string())),
+            || assert!(block(tools::scan_library(&ll(), &scan_args())).is_err()),
+        );
+    }
+
+    #[test]
+    fn transport_errors_carrying_the_url_are_redacted() {
+        let e = plugin_toolkit::capsink::with_cap_sink(
+            Box::new(|_: &str, _: &str| {
+                Err(format!(
+                    "error sending request for url (http://ll.test/api?apikey={KEY}&cmd=getIndex)"
+                ))
+            }),
+            || block(ll().authors()).unwrap_err().to_string(),
+        );
+        assert!(e.starts_with("getIndex:"), "{e}");
+        assert!(!e.contains(KEY), "{e}");
+        assert!(e.contains("apikey=***"), "{e}");
+    }
+
+    #[test]
+    fn dry_run_writes_make_no_http_request() {
+        let cfg = std::sync::Arc::new(plugin_toolkit::contract::config::Config::load().unwrap());
+        let ctx = plugin_toolkit::contract::ToolCtx::new(cfg);
+        let caps = Arc::new(Mutex::new(Vec::new()));
+        let log = caps.clone();
+        plugin_toolkit::capsink::with_cap_sink(
+            Box::new(move |cap: &str, _: &str| {
+                log.lock().unwrap().push(cap.to_string());
+                Err(format!("unexpected {cap}"))
+            }),
+            || {
+                for (tool, args) in [
+                    (
+                        "lazylibrarian.books.want",
+                        json!({"name": "ll", "book_ids": ["B1"], "format": "both", "dryRun": true}),
+                    ),
+                    (
+                        "lazylibrarian.wanted.search",
+                        json!({"name": "ll", "dryRun": true}),
+                    ),
+                    (
+                        "lazylibrarian.library.scan",
+                        json!({"name": "ll", "dryRun": true}),
+                    ),
+                ] {
+                    let out = block(plugin_toolkit::dispatch::dispatch(tool, args, &ctx))
+                        .unwrap_or_else(|e| panic!("{tool}: {e:#}"));
+                    assert_eq!(out["dryRun"], json!(true), "{tool}: {out}");
+                }
+            },
+        );
+        let caps = caps.lock().unwrap();
+        assert!(!caps.iter().any(|c| c == "http.request"), "{caps:?}");
     }
 
     #[test]

@@ -135,11 +135,7 @@ impl Ll {
     }
 
     fn excerpt(&self, text: &str) -> String {
-        let text = if self.api_key.is_empty() {
-            text.trim().to_string()
-        } else {
-            text.trim().replace(&self.api_key, "***")
-        };
+        let text = redact(text.trim(), &self.api_key);
         let cut = text
             .char_indices()
             .nth(ERROR_EXCERPT)
@@ -150,11 +146,47 @@ impl Ll {
 
 const ERROR_EXCERPT: usize = 256;
 
+pub fn redact(text: &str, key: &str) -> String {
+    let mut text = text.to_string();
+    if !key.is_empty() {
+        text = text
+            .replace(key, "***")
+            .replace(&percent_encoded(key), "***");
+    }
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut rest = 0;
+    while let Some(at) = lower[rest..].find("apikey=") {
+        let start = rest + at + "apikey=".len();
+        let end = text[start..]
+            .find(|c: char| {
+                c == '&' || c == '"' || c == '\'' || c == '<' || c == '>' || c.is_whitespace()
+            })
+            .map_or(text.len(), |i| start + i);
+        out.push_str(&text[rest..start]);
+        out.push_str("***");
+        rest = end;
+    }
+    out.push_str(&text[rest..]);
+    out
+}
+
+fn percent_encoded(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 pub fn check_id(id: &str) -> Result<()> {
     if id.is_empty()
         || !id
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':')
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
         bail!("invalid lazylibrarian id {id:?}");
     }
@@ -261,7 +293,21 @@ mod tests {
         assert!(check_id("GB123").is_ok());
         assert!(check_id("OL123W").is_ok());
         assert!(check_id("1&cmd=shutdown").is_err());
+        assert!(check_id("a:b").is_err());
         assert!(check_id("").is_err());
+    }
+
+    #[test]
+    fn redact_strips_raw_encoded_and_unknown_keys() {
+        let key = "k3y/with+chars";
+        let r = redact(
+            "a k3y/with+chars b k3y%2Fwith%2Bchars c ?APIKEY=other&cmd=x apikey=tail",
+            key,
+        );
+        assert!(!r.contains("k3y"), "{r}");
+        assert!(!r.contains("other"), "{r}");
+        assert!(!r.contains("tail"), "{r}");
+        assert!(r.contains("&cmd=x"), "{r}");
     }
 
     #[test]
