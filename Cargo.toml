@@ -16,17 +16,11 @@ crate-type = ["rlib"]
 name = "lazylibrarian"
 path = "src/main.rs"
 
-# lazylibrarian is a BACKEND-ONLY orca plugin: zero #[orca_tool]s. It registers a
-# ServiceBackend over the orca socket and reaches the whole orca system
-# through plugin-toolkit alone.
 [dependencies]
-plugin-toolkit = { git = "https://github.com/argyle-labs/orca", branch = "main", package = "orca-plugin-toolkit" }
+plugin-toolkit = { git = "https://github.com/argyle-labs/orca", branch = "main", package = "orca-plugin-toolkit", default-features = false, features = ["tools", "db", "delegated-http"] }
 
 [dev-dependencies]
-plugin-toolkit = { git = "https://github.com/argyle-labs/orca", branch = "main", package = "orca-plugin-toolkit" }
-tokio    = { version = "1", features = ["macros", "rt-multi-thread"] }
-tempfile = "3"
-wiremock = "0.6"
+tokio = { version = "1", features = ["rt"] }
 
 [lints.clippy]
 let_underscore_must_use = "deny"

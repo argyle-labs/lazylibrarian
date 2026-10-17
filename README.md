@@ -71,7 +71,7 @@ Back up the config/data volume(s) above — that's the whole service state (stop
 
 ## With orca
 
-orca drives this plugin through the single generic `service.*` surface — no per-plugin tools:
+orca drives the service lifecycle through the generic `service.*` surface:
 
 ```sh
 orca service.deploy lazylibrarian      # render + launch on any supported runtime
@@ -80,9 +80,33 @@ orca service.backup lazylibrarian      # location-agnostic backup (tar; PBS on P
 orca service.configure lazylibrarian   # apply config via the upstream API
 ```
 
+Library tools translate the LazyLibrarian API (`/api?cmd=...`). The endpoint stores
+routes only; the API key is the scoped secret `api_key`. Reads need `read`, writes
+need `admin`; writes run when called and accept `dryRun` for a preview.
+
+| Tool | Upstream command |
+|---|---|
+| `lazylibrarian.authors.list` | `getIndex` |
+| `lazylibrarian.books.list` | `getAllBooks` (`status`, `audiostatus`) |
+| `lazylibrarian.parity.list` | `getAllBooks`, books whose ebook and audiobook availability differ |
+| `lazylibrarian.books.want` | `queueBook` (`type=eBook`/`AudioBook`) |
+| `lazylibrarian.wanted.search` | `forceBookSearch` |
+| `lazylibrarian.library.scan` | `forceLibraryScan`, `forceAudioBookScan` |
+
+`books.list` takes `limit`. `parity.list` and the media `units` read the whole
+`getAllBooks` table: upstream offers `limit` without an offset, so a partial read
+would silently drop books from the report.
+
+**Upgrading from an older endpoint:** `base_url` and the inline `api_key` are gone.
+Set the endpoint's routes and store the key as its `api_key` secret; an endpoint
+without routes fails with `endpoint <name> has no routes`.
+
+The media facet registers as the ebook and audiobook acquirer (`list`, `search`,
+`library_add`, `units`).
+
 ## Layout
 
-- `src/` — the plugin (pure Rust): the `ServiceBackend` descriptor + `configure` / `status`.
+- `src/` — the plugin (pure Rust): the `ServiceBackend` descriptor, API client, library tools, media facet.
 - `docs/` — standalone operator notes.
 - [CAPABILITIES.md](CAPABILITIES.md) — the service-backend contract checklist.
 - `assets/` — plugin icon.
