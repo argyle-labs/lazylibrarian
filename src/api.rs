@@ -26,6 +26,16 @@ pub struct Book {
     pub audio_status: Option<String>,
 }
 
+#[orca_struct]
+#[derive(Debug, Clone, PartialEq)]
+pub struct Author {
+    pub id: String,
+    pub name: String,
+    pub status: Option<String>,
+    pub have_books: Option<u64>,
+    pub total_books: Option<u64>,
+}
+
 impl Ll {
     pub fn new(base_url: &str, api_key: &str) -> Self {
         Self {
@@ -82,6 +92,11 @@ impl Ll {
         Ok(())
     }
 
+    pub async fn authors(&self) -> Result<Vec<Author>> {
+        let v = self.call("getIndex", &[]).await?;
+        Ok(rows(&v).iter().map(parse_author).collect())
+    }
+
     pub async fn books(&self, params: &[(&str, &str)]) -> Result<Vec<Book>> {
         let v = self.call("getAllBooks", params).await?;
         Ok(rows(&v).iter().map(parse_book).collect())
@@ -96,6 +111,27 @@ impl Ll {
         check_id(book_id)?;
         self.command("queueBook", &[("id", book_id), ("type", library)])
             .await
+    }
+
+    pub async fn force_search(&self, library: Option<&str>) -> Result<()> {
+        match library {
+            Some(ty) => self.command("forceBookSearch", &[("type", ty)]).await,
+            None => self.command("forceBookSearch", &[]).await,
+        }
+    }
+
+    pub async fn scan(&self, library: &str, author_id: Option<&str>) -> Result<()> {
+        let cmd = match library {
+            "AudioBook" => "forceAudioBookScan",
+            _ => "forceLibraryScan",
+        };
+        match author_id {
+            Some(id) => {
+                check_id(id)?;
+                self.command(cmd, &[("id", id)]).await
+            }
+            None => self.command(cmd, &[]).await,
+        }
     }
 
     fn excerpt(&self, text: &str) -> String {
@@ -147,6 +183,21 @@ fn opt_str(v: &Value) -> Option<String> {
     }
 }
 
+fn opt_u64(v: &Value) -> Option<u64> {
+    v.as_u64()
+        .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+}
+
+pub fn parse_author(row: &Value) -> Author {
+    Author {
+        id: opt_str(field(row, "AuthorID")).unwrap_or_default(),
+        name: opt_str(field(row, "AuthorName")).unwrap_or_default(),
+        status: opt_str(field(row, "Status")),
+        have_books: opt_u64(field(row, "HaveBooks")),
+        total_books: opt_u64(field(row, "TotalBooks")),
+    }
+}
+
 pub fn parse_book(row: &Value) -> Book {
     Book {
         id: opt_str(field(row, "BookID")).unwrap_or_default(),
@@ -185,6 +236,17 @@ mod tests {
         assert_eq!(b.id, "GB9");
         assert_eq!(b.title, "Elantris");
         assert_eq!(b.isbn, None);
+    }
+
+    #[test]
+    fn author_decodes_getindex_row_without_paths() {
+        let a = parse_author(&json!({
+            "AuthorID": "A1", "AuthorName": "Brandon Sanderson", "Status": "Active",
+            "HaveBooks": 12, "TotalBooks": "40", "AuthorImg": "cache/author/A1.jpg"
+        }));
+        assert_eq!(a.name, "Brandon Sanderson");
+        assert_eq!(a.have_books, Some(12));
+        assert_eq!(a.total_books, Some(40));
     }
 
     #[test]

@@ -71,11 +71,13 @@ impl ServiceBackend for LazylibrarianBackend {
 }
 
 pub mod api;
+pub mod parity;
 pub mod tools;
 
 use plugin_toolkit::clap;
 use plugin_toolkit::media::{
-    Capability, MediaBackend, MediaError, MediaItem, MediaMutation, MediaType,
+    Capability, MediaBackend, MediaError, MediaIdentity, MediaItem, MediaMutation, MediaType,
+    MediaUnit,
 };
 
 #[plugin_toolkit::endpoint_resource(plugin = "lazylibrarian")]
@@ -146,6 +148,7 @@ impl MediaBackend for LlMedia {
             Capability::List,
             Capability::Search,
             Capability::LibraryAdd,
+            Capability::Units,
         ]
     }
     fn endpoint(&self) -> String {
@@ -179,6 +182,50 @@ impl MediaBackend for LlMedia {
             message: Some(format!("queueBook id={item_ref} type={ty}")),
         })
     }
+
+    async fn units(&self) -> Result<Vec<MediaUnit>, MediaError> {
+        let books = self.connect().await?.books(&[]).await.map_err(transport)?;
+        Ok(units(books, self.media_type))
+    }
+}
+
+pub fn units(books: Vec<api::Book>, media_type: MediaType) -> Vec<MediaUnit> {
+    books
+        .into_iter()
+        .filter_map(|b| to_unit(b, media_type))
+        .collect()
+}
+
+pub fn to_unit(b: api::Book, media_type: MediaType) -> Option<MediaUnit> {
+    let status = match media_type {
+        MediaType::Audiobooks => b.audio_status.as_deref(),
+        MediaType::Ebooks => b.ebook_status.as_deref(),
+        _ => return None,
+    };
+    if b.title.is_empty() || parity::availability(status) != parity::Availability::Have {
+        return None;
+    }
+    let mut identity = MediaIdentity {
+        title: b.title,
+        year: b
+            .published
+            .as_deref()
+            .and_then(|d| d.get(..4))
+            .and_then(|y| y.parse().ok()),
+        external_ids: Vec::new(),
+        series: None,
+    };
+    if let Some(isbn) = &b.isbn {
+        identity = identity.with_external_id("isbn", isbn, media_type);
+    }
+    Some(MediaUnit {
+        media_type,
+        identity,
+        variants: Vec::new(),
+        sources: Vec::new(),
+        downloaded_by: vec!["lazylibrarian".to_string()],
+        served_by: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -205,6 +252,7 @@ mod tests {
             Capability::List,
             Capability::Search,
             Capability::LibraryAdd,
+            Capability::Units,
         ] {
             assert!(m.capabilities().contains(&cap), "missing {cap:?}");
         }
@@ -372,5 +420,180 @@ mod tests {
         );
         assert!(format!("{e:#}").contains("lazylibrarian"), "{e:#}");
         assert_eq!(*caps.lock().unwrap(), vec!["secret.op"]);
+    }
+
+    fn ok_route(q: &str) -> Option<(u16, String)> {
+        let _ = q;
+        Some((200, "OK".to_string()))
+    }
+
+    #[test]
+    fn authors_read_getindex() {
+        let calls = serve(
+            |_| {
+                Some((
+                    200,
+                    json!([{"AuthorID": "A1", "AuthorName": "N", "HaveBooks": 1}]).to_string(),
+                ))
+            },
+            || assert_eq!(block(ll().authors()).unwrap()[0].id, "A1"),
+        );
+        assert_eq!(calls, vec!["cmd=getIndex"]);
+    }
+
+    #[test]
+    fn books_list_filters_server_side_and_by_author() {
+        let calls = serve(
+            |_| {
+                Some((
+                    200,
+                    json!([
+                        {"BookID": "B1", "AuthorID": "A1", "Status": "Wanted"},
+                        {"BookID": "B2", "AuthorID": "A2", "Status": "Wanted"}
+                    ])
+                    .to_string(),
+                ))
+            },
+            || {
+                let args = tools::BooksArgs {
+                    name: "ll".into(),
+                    status: Some("Wanted".into()),
+                    audio_status: Some("Skipped".into()),
+                    author_id: Some("A1".into()),
+                };
+                let got = block(tools::list_books(&ll(), &args)).unwrap();
+                assert_eq!(got.len(), 1);
+                assert_eq!(got[0].id, "B1");
+            },
+        );
+        assert_eq!(
+            calls,
+            vec!["cmd=getAllBooks&status=Wanted&audiostatus=Skipped"]
+        );
+    }
+
+    #[test]
+    fn want_both_queues_each_format_and_reports_failures() {
+        let calls = serve(
+            |q| {
+                if q.contains("id=BAD") {
+                    Some((200, "Invalid id: BAD".to_string()))
+                } else {
+                    ok_route(q)
+                }
+            },
+            || {
+                let args = tools::WantArgs {
+                    name: "ll".into(),
+                    book_ids: vec!["B1".into(), "BAD".into()],
+                    format: tools::Format::Both,
+                };
+                let r = block(tools::want_books(&ll(), &args)).unwrap();
+                assert_eq!(r.wanted, vec!["B1"]);
+                assert_eq!(r.failed[0].id, "BAD");
+            },
+        );
+        assert_eq!(
+            calls,
+            vec![
+                "cmd=queueBook&id=B1&type=eBook",
+                "cmd=queueBook&id=B1&type=AudioBook",
+                "cmd=queueBook&id=BAD&type=eBook",
+            ]
+        );
+    }
+
+    #[test]
+    fn want_rejects_bad_ids_before_any_call() {
+        let calls = serve(ok_route, || {
+            let args = tools::WantArgs {
+                name: "ll".into(),
+                book_ids: vec!["B1".into(), "x&cmd=shutdown".into()],
+                format: tools::Format::Ebook,
+            };
+            assert!(block(tools::want_books(&ll(), &args)).is_err());
+        });
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn wanted_search_passes_type_only_for_one_format() {
+        let calls = serve(ok_route, || {
+            assert!(
+                block(tools::search_wanted(&ll(), tools::Format::Both))
+                    .unwrap()
+                    .started
+            );
+            block(tools::search_wanted(&ll(), tools::Format::Audiobook)).unwrap();
+        });
+        assert_eq!(
+            calls,
+            vec!["cmd=forceBookSearch", "cmd=forceBookSearch&type=AudioBook"]
+        );
+    }
+
+    #[test]
+    fn wanted_search_fails_when_no_search_method_is_configured() {
+        serve(
+            |_| Some((200, "No search methods set, check config".to_string())),
+            || {
+                let e = block(tools::search_wanted(&ll(), tools::Format::Both)).unwrap_err();
+                assert!(e.to_string().contains("No search methods"), "{e}");
+            },
+        );
+    }
+
+    #[test]
+    fn scan_both_runs_ebook_and_audiobook_scans() {
+        let calls = serve(ok_route, || {
+            let args = tools::ScanArgs {
+                name: "ll".into(),
+                format: tools::Format::Both,
+                author_id: Some("A1".into()),
+            };
+            block(tools::scan_library(&ll(), &args)).unwrap();
+        });
+        assert_eq!(
+            calls,
+            vec!["cmd=forceLibraryScan&id=A1", "cmd=forceAudioBookScan&id=A1"]
+        );
+    }
+
+    #[test]
+    fn units_carry_isbn_and_only_owned_format() {
+        let mut got = Vec::new();
+        serve(
+            |_| {
+                Some((
+                    200,
+                    json!([
+                        {"BookID": "B1", "BookName": "The Way of Kings", "BookIsbn": "0-7653-2635-5",
+                         "BookDate": "2010-08-31", "Status": "Open", "audiostatus": "Wanted"},
+                        {"BookID": "B2", "BookName": "Elantris", "Status": "Skipped", "audiostatus": "Open"}
+                    ])
+                    .to_string(),
+                ))
+            },
+            || {
+                let books = block(ll().books(&[])).unwrap();
+                got = units(books.clone(), MediaType::Ebooks);
+                assert_eq!(
+                    units(books.clone(), MediaType::Audiobooks)[0]
+                        .identity
+                        .title,
+                    "Elantris"
+                );
+                assert!(units(books, MediaType::Movies).is_empty());
+            },
+        );
+        assert_eq!(got.len(), 1);
+        let u = &got[0];
+        assert_eq!(u.identity.year, Some(2010));
+        assert_eq!(u.downloaded_by, vec!["lazylibrarian"]);
+        assert!(u
+            .identity
+            .external_ids
+            .iter()
+            .any(|e| e.source == "isbn" && e.id == "9780765326355"));
     }
 }
