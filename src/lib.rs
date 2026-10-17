@@ -1,9 +1,3 @@
-//! lazylibrarian service backend — LazyLibrarian ebook/audiobook library manager.
-//!
-//! Implements `ServiceBackend` so the generic `service.*` tools
-//! (deploy/backup/restore/configure/status/connect/sync) drive lazylibrarian. No
-//! `#[orca_tool]`s — the only orca dep is `plugin-toolkit`. Modeled on the
-//! nfs StorageBackend. See orca/docs/PLUGIN-PROGRAM.md.
 #![allow(clippy::disallowed_types)]
 
 use plugin_toolkit::service::{
@@ -11,8 +5,6 @@ use plugin_toolkit::service::{
     WorkloadSpec,
 };
 
-/// lazylibrarian backend. Holds only the provider name; per-instance routes/creds
-/// come from the `Routes` the generic `service.*` tools hand each op.
 #[derive(Debug, Clone)]
 pub struct LazylibrarianBackend {
     provider: &'static str,
@@ -29,9 +21,6 @@ impl ServiceBackend for LazylibrarianBackend {
         self.provider
     }
 
-    /// Runtimes lazylibrarian can be placed on. `service.deploy` hands the
-    /// `workload_spec` below to a matching deploy target — this backend never
-    /// drives pct/docker itself (that mechanic lives in the deploy-target domain).
     fn runtimes(&self) -> Vec<Runtime> {
         vec![Runtime::Docker, Runtime::Podman, Runtime::Lxc]
     }
@@ -50,10 +39,6 @@ impl ServiceBackend for LazylibrarianBackend {
         5299
     }
 
-    /// In-workload paths holding config/data. This is ALL lazylibrarian declares for
-    /// backup — the generic pluggable backup (tar for containers/LXC, PBS for
-    /// Proxmox guests when available) snapshots these. No backup/restore code
-    /// here; those are inherited from ServiceBackend's defaults.
     fn data_paths(&self) -> Vec<String> {
         vec!["/config".to_string()]
     }
@@ -64,9 +49,6 @@ impl ServiceBackend for LazylibrarianBackend {
         _instance: &'a str,
         _routes: &'a Routes,
     ) -> BoxFuture<'a, Result<WorkloadSpec, ServiceError>> {
-        // TODO: describe the lazylibrarian workload (image/template, ports, mounts,
-        // env) for the chosen runtime. The deploy target turns this into a
-        // compose service / LXC config / VM. See deploy-target::WorkloadSpec.
         Box::pin(async move { Err(ServiceError::unimplemented("lazylibrarian.workload_spec")) })
     }
 
@@ -76,7 +58,6 @@ impl ServiceBackend for LazylibrarianBackend {
         _routes: &'a Routes,
         _config: &'a str,
     ) -> BoxFuture<'a, Result<(), ServiceError>> {
-        // TODO: apply lazylibrarian-specific config idempotently.
         Box::pin(async move { Err(ServiceError::unimplemented("lazylibrarian.configure")) })
     }
 
@@ -85,76 +66,70 @@ impl ServiceBackend for LazylibrarianBackend {
         _instance: &'a str,
         _routes: &'a Routes,
     ) -> BoxFuture<'a, Result<ServiceStatus, ServiceError>> {
-        // TODO: real health/diagnostics.
         Box::pin(async move { Err(ServiceError::unimplemented("lazylibrarian.status")) })
     }
 }
 
-// ── Media downloaded_by facet ────────────────────────────────────────────────
-//
-// LazyLibrarian is not only a deployable *service* — it *acquires* ebooks and
-// audiobooks. It registers a `media` backend per acquired type so orca's generic
-// `media downloaded-by` surface drives search / queue (library add) / listing
-// from ONE place, instead of per-app. See orca#403 / #404.
+pub mod api;
+pub mod tools;
 
-use plugin_toolkit::clap; // the endpoint_resource! tools emit unqualified `clap::` paths
-use plugin_toolkit::http::Client as HttpClient;
+use plugin_toolkit::clap;
 use plugin_toolkit::media::{
     Capability, MediaBackend, MediaError, MediaItem, MediaMutation, MediaType,
 };
-use plugin_toolkit::{serde, serde_json};
 
-/// Endpoint registry for the LazyLibrarian server orca talks to: `(base_url,
-/// api_key)` keyed by `name`. `endpoint_resource!` emits the row struct,
-/// `endpoint_db` accessors, schema fragment, and the
-/// `lazylibrarian.{list,detail,create,update,delete}` CRUD tools in one shot. The
-/// media facet resolves its connection from an enabled row here at call time.
 #[plugin_toolkit::endpoint_resource(plugin = "lazylibrarian")]
 pub struct LazylibrarianEndpoint {
     pub name: String,
-    pub base_url: String,
     #[secret]
     pub api_key: String,
     pub enabled: bool,
 }
 
-/// A media `downloaded_by` backend for one media type LazyLibrarian acquires.
-/// Registered per acquired type (ebooks, audiobooks) — the builder gives each a
-/// type-qualified invoke prefix so they never collide.
 #[derive(Debug, Clone)]
 pub struct LlMedia {
     media_type: MediaType,
 }
 
 impl LlMedia {
-    /// Register LazyLibrarian as the acquirer (`downloaded_by`) for `media_type`.
     pub fn acquires(media_type: MediaType) -> Self {
         Self { media_type }
     }
 
-    /// Load the first enabled configured endpoint. The `endpoint_db` read is only
-    /// valid inside an `Invoke` (cap sink active), so it's called from the async
-    /// verbs, never from `endpoint()`.
-    fn resolve_config(&self) -> Result<LlConfig, MediaError> {
-        let rows = endpoint_db::list()
-            .map_err(|e| MediaError::Transport(format!("read endpoints: {e}")))?;
-        let ep = rows
-            .into_iter()
-            .find(|r| r.enabled)
-            .ok_or_else(|| MediaError::NotFound("no enabled lazylibrarian endpoint".into()))?;
-        Ok(LlConfig {
-            base_url: ep.base_url,
-            api_key: ep.api_key,
-        })
-    }
-
-    /// LazyLibrarian's `queueBook` type token for this media type.
-    fn ll_type(&self) -> &'static str {
+    pub fn ll_type(&self) -> &'static str {
         match self.media_type {
             MediaType::Audiobooks => "AudioBook",
             _ => "eBook",
         }
     }
+
+    async fn connect(&self) -> Result<api::Ll, MediaError> {
+        let rows = endpoint_db::list()
+            .map_err(|e| MediaError::Transport(format!("read endpoints: {e}")))?;
+        let ep = rows
+            .into_iter()
+            .filter(|r| r.enabled)
+            .min_by(|a, b| a.name.cmp(&b.name))
+            .ok_or_else(|| MediaError::NotFound("no enabled lazylibrarian endpoint".into()))?;
+        tools::connect(&ep.name).await.map_err(transport)
+    }
+
+    fn to_item(&self, b: api::Book) -> MediaItem {
+        let status = match self.media_type {
+            MediaType::Audiobooks => b.audio_status,
+            _ => b.ebook_status,
+        };
+        MediaItem {
+            id: b.id,
+            title: b.title,
+            status,
+            path: None,
+        }
+    }
+}
+
+fn transport(e: plugin_toolkit::anyhow::Error) -> MediaError {
+    MediaError::Transport(format!("{e:#}"))
 }
 
 #[plugin_toolkit::orca_async]
@@ -165,8 +140,6 @@ impl MediaBackend for LlMedia {
     fn media_type(&self) -> MediaType {
         self.media_type
     }
-    /// An acquirer: enumerate the tracked library, search providers, and queue a
-    /// book for download (library add).
     fn capabilities(&self) -> Vec<Capability> {
         vec![
             Capability::DownloadedBy,
@@ -175,162 +148,46 @@ impl MediaBackend for LlMedia {
             Capability::LibraryAdd,
         ]
     }
-    /// Built at startup (outside the capability sink), so this must not touch the
-    /// db — the real connection is resolved lazily in the verbs.
     fn endpoint(&self) -> String {
         String::new()
     }
 
-    /// Every book LazyLibrarian tracks (`getAllBooks`).
     async fn list(&self) -> Result<Vec<MediaItem>, MediaError> {
-        let cfg = self.resolve_config()?;
-        let books = LlClient::new(&cfg).get_books("getAllBooks", &[]).await?;
-        Ok(books.into_iter().map(LlBook::into_item).collect())
+        let books = self.connect().await?.books(&[]).await.map_err(transport)?;
+        Ok(books.into_iter().map(|b| self.to_item(b)).collect())
     }
 
-    /// Search Goodreads/GoogleBooks for a title (`findBook&name=`). The returned
-    /// ids are what [`library_add`](Self::library_add) queues.
     async fn search(&self, query: &str) -> Result<Vec<MediaItem>, MediaError> {
-        let cfg = self.resolve_config()?;
-        let books = LlClient::new(&cfg)
-            .get_books("findBook", &[("name", query)])
-            .await?;
-        Ok(books.into_iter().map(LlBook::into_item).collect())
+        let books = self
+            .connect()
+            .await?
+            .find_books(query)
+            .await
+            .map_err(transport)?;
+        Ok(books.into_iter().map(|b| self.to_item(b)).collect())
     }
 
-    /// Queue a book for download (`queueBook&id=&type=`), marking it Wanted.
     async fn library_add(&self, item_ref: &str) -> Result<MediaMutation, MediaError> {
-        let cfg = self.resolve_config()?;
         let ty = self.ll_type();
-        let resp = LlClient::new(&cfg)
-            .api("queueBook", &[("id", item_ref), ("type", ty)])
-            .await?;
+        self.connect()
+            .await?
+            .queue_book(item_ref, ty)
+            .await
+            .map_err(transport)?;
         Ok(MediaMutation {
-            ok: (200..300).contains(&resp),
-            message: Some(format!("queueBook id={item_ref} type={ty} → HTTP {resp}")),
+            ok: true,
+            message: Some(format!("queueBook id={item_ref} type={ty}")),
         })
-    }
-}
-
-// ── LazyLibrarian HTTP client ────────────────────────────────────────────────
-
-/// Resolved connection to one LazyLibrarian server.
-struct LlConfig {
-    base_url: String,
-    api_key: String,
-}
-
-/// Minimal LazyLibrarian API client. Every call is `GET {base}/api?apikey=…&cmd=…`
-/// plus command params; JSON commands return a book array (bare or `{data:[…]}`).
-struct LlClient<'a> {
-    cfg: &'a LlConfig,
-    http: HttpClient,
-}
-
-impl<'a> LlClient<'a> {
-    fn new(cfg: &'a LlConfig) -> Self {
-        Self {
-            cfg,
-            http: HttpClient::new(),
-        }
-    }
-
-    /// Build the `/api` URL for `cmd` with `params` (apikey + values url-encoded).
-    fn url(&self, cmd: &str, params: &[(&str, &str)]) -> String {
-        let mut url = format!(
-            "{}/api?apikey={}&cmd={}",
-            self.cfg.base_url.trim_end_matches('/'),
-            percent_encode(&self.cfg.api_key),
-            percent_encode(cmd),
-        );
-        for (k, v) in params {
-            url.push('&');
-            url.push_str(k);
-            url.push('=');
-            url.push_str(&percent_encode(v));
-        }
-        url
-    }
-
-    /// Fire a command, returning the HTTP status (for mutations like `queueBook`).
-    async fn api(&self, cmd: &str, params: &[(&str, &str)]) -> Result<u16, MediaError> {
-        let resp = self
-            .http
-            .get(self.url(cmd, params))
-            .send()
-            .await
-            .map_err(|e| MediaError::Transport(format!("{cmd}: {e}")))?;
-        Ok(resp.status)
-    }
-
-    /// Fire a JSON command and decode its book list (bare array or `{data:[…]}`).
-    async fn get_books(
-        &self,
-        cmd: &str,
-        params: &[(&str, &str)],
-    ) -> Result<Vec<LlBook>, MediaError> {
-        let resp = self
-            .http
-            .get(self.url(cmd, params))
-            .send()
-            .await
-            .map_err(|e| MediaError::Transport(format!("{cmd}: {e}")))?;
-        let value = resp
-            .json::<serde_json::Value>()
-            .map_err(|e| MediaError::Transport(format!("decode {cmd}: {e}")))?;
-        // LazyLibrarian returns either a bare array or `{ "data": [ … ] }`.
-        let arr = value
-            .get("data")
-            .filter(|d| d.is_array())
-            .unwrap_or(&value)
-            .clone();
-        serde_json::from_value::<Vec<LlBook>>(arr)
-            .map_err(|e| MediaError::Transport(format!("decode {cmd} rows: {e}")))
-    }
-}
-
-/// URL-encode a query value (RFC 3986 unreserved set passes through).
-fn percent_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
-
-/// One row of a LazyLibrarian book command. Field casing varies across
-/// commands (`getAllBooks` PascalCase vs `findBook` lowercase), so each field
-/// carries aliases.
-#[derive(serde::Deserialize)]
-#[serde(crate = "plugin_toolkit::serde")]
-struct LlBook {
-    #[serde(default, rename = "BookID", alias = "bookid")]
-    book_id: String,
-    #[serde(default, rename = "BookName", alias = "bookname", alias = "title")]
-    book_name: String,
-    #[serde(default, rename = "Status", alias = "status")]
-    status: Option<String>,
-}
-
-impl LlBook {
-    fn into_item(self) -> MediaItem {
-        MediaItem {
-            id: self.book_id,
-            title: self.book_name,
-            status: self.status,
-            path: None,
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plugin_toolkit::serde_json::{self, json};
+    use std::sync::{Arc, Mutex};
+
+    pub(crate) const KEY: &str = "0123456789abcdef0123456789abcdef";
 
     #[test]
     fn declares_provider() {
@@ -355,110 +212,165 @@ mod tests {
             LlMedia::acquires(MediaType::Audiobooks).ll_type(),
             "AudioBook"
         );
-        assert_eq!(LlMedia::acquires(MediaType::Ebooks).ll_type(), "eBook");
+        assert_eq!(m.ll_type(), "eBook");
     }
 
-    #[test]
-    fn query_values_are_percent_encoded() {
-        assert_eq!(percent_encode("The Way of Kings"), "The%20Way%20of%20Kings");
-        assert_eq!(percent_encode("a&b=c"), "a%26b%3Dc");
+    pub(crate) fn serve<F>(
+        route: impl Fn(&str) -> Option<(u16, String)> + 'static,
+        body: F,
+    ) -> Vec<String>
+    where
+        F: FnOnce(),
+    {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        plugin_toolkit::capsink::with_cap_sink(
+            Box::new(move |cap: &str, req: &str| {
+                assert_eq!(cap, "http.request");
+                let req: serde_json::Value = serde_json::from_str(req).unwrap();
+                assert_eq!(req["method"], "GET");
+                let url = req["url"].as_str().unwrap().to_string();
+                let query = url
+                    .strip_prefix("http://ll.test/api?")
+                    .unwrap_or_else(|| panic!("unexpected url {url}"))
+                    .to_string();
+                assert!(query.contains(&format!("apikey={KEY}")), "{query}");
+                let query = query.replace(&format!("apikey={KEY}&"), "");
+                log.lock().unwrap().push(query.clone());
+                let (status, body) = route(&query).unwrap_or((404, "Not Found".to_string()));
+                Ok(json!({"status": status, "headers": [], "body": body.into_bytes()}).to_string())
+            }),
+            body,
+        );
+        let out = seen.lock().unwrap().clone();
+        out
     }
 
-    // Pins the getAllBooks row shape this backend maps from.
-    #[test]
-    fn ll_book_decodes_getallbooks_row() {
-        let raw = serde_json::json!({
-            "BookID": "GB123", "BookName": "The Way of Kings",
-            "AuthorName": "Brandon Sanderson", "BookIsbn": "9780765326355", "Status": "Open"
-        });
-        let b: LlBook = serde_json::from_value(raw).unwrap();
-        let item = b.into_item();
-        assert_eq!(item.id, "GB123");
-        assert_eq!(item.title, "The Way of Kings");
-        assert_eq!(item.status.as_deref(), Some("Open"));
-    }
-
-    // ── Integration: LlClient against a mock LazyLibrarian server ──────────────
-    // Exercises the real /api?apikey=&cmd= path — query params (apikey, cmd,
-    // name, id, type), the bare-array-vs-{data:[]} decode, and the mutation
-    // status — without the endpoint db.
-    use wiremock::matchers::{method, path, query_param};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    fn cfg(uri: String) -> LlConfig {
-        LlConfig {
-            base_url: uri,
-            api_key: "KEY".into(),
-        }
-    }
-
-    #[tokio::test]
-    async fn list_reads_getallbooks_with_apikey() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/api"))
-            .and(query_param("apikey", "KEY"))
-            .and(query_param("cmd", "getAllBooks"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {"BookID": "GB1", "BookName": "Elantris", "Status": "Have"}
-            ])))
-            .mount(&server)
-            .await;
-        let c = cfg(server.uri());
-        let items = LlClient::new(&c)
-            .get_books("getAllBooks", &[])
-            .await
+    pub(crate) fn block<T>(f: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
             .unwrap()
-            .into_iter()
-            .map(LlBook::into_item)
-            .collect::<Vec<_>>();
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].id, "GB1");
-        assert_eq!(items[0].title, "Elantris");
-        assert_eq!(items[0].status.as_deref(), Some("Have"));
+            .block_on(f)
     }
 
-    #[tokio::test]
-    async fn search_passes_name_and_decodes_data_wrapper() {
-        let server = MockServer::start().await;
-        // findBook with the search term; response wrapped in {data:[...]}.
-        Mock::given(method("GET"))
-            .and(path("/api"))
-            .and(query_param("cmd", "findBook"))
-            .and(query_param("name", "The Way of Kings"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": [{"bookid": "GB9", "bookname": "The Way of Kings"}]
-            })))
-            .mount(&server)
-            .await;
-        let c = cfg(server.uri());
-        let books = LlClient::new(&c)
-            .get_books("findBook", &[("name", "The Way of Kings")])
-            .await
-            .unwrap();
-        // lowercase findBook field aliases resolve.
-        assert_eq!(books.len(), 1);
-        let item = books.into_iter().next().unwrap().into_item();
-        assert_eq!(item.id, "GB9");
-        assert_eq!(item.title, "The Way of Kings");
+    pub(crate) fn ll() -> api::Ll {
+        api::Ll::new("http://ll.test/", KEY)
     }
 
-    #[tokio::test]
-    async fn library_add_queues_with_id_and_type() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/api"))
-            .and(query_param("cmd", "queueBook"))
-            .and(query_param("id", "GB1"))
-            .and(query_param("type", "AudioBook"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-        let c = cfg(server.uri());
-        let status = LlClient::new(&c)
-            .api("queueBook", &[("id", "GB1"), ("type", "AudioBook")])
-            .await
-            .unwrap();
-        assert_eq!(status, 200);
+    #[test]
+    fn books_read_getallbooks_with_apikey() {
+        let mut got = Vec::new();
+        let calls = serve(
+            |q| {
+                (q == "cmd=getAllBooks").then(|| {
+                    (
+                        200,
+                        json!([{"BookID": "GB1", "BookName": "Elantris", "Status": "Open", "audiostatus": "Skipped"}])
+                            .to_string(),
+                    )
+                })
+            },
+            || got = block(ll().books(&[])).unwrap(),
+        );
+        assert_eq!(calls, vec!["cmd=getAllBooks"]);
+        assert_eq!(got[0].id, "GB1");
+        let audio = LlMedia::acquires(MediaType::Audiobooks).to_item(got[0].clone());
+        assert_eq!(audio.status.as_deref(), Some("Skipped"));
+    }
+
+    #[test]
+    fn find_book_percent_encodes_the_name() {
+        let calls = serve(
+            |_| {
+                Some((
+                    200,
+                    json!([{"bookid": "GB9", "bookname": "The Way of Kings"}]).to_string(),
+                ))
+            },
+            || {
+                let b = block(ll().find_books("The Way of Kings & more")).unwrap();
+                assert_eq!(b[0].id, "GB9");
+            },
+        );
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("cmd=findBook&name=The"), "{calls:?}");
+        assert!(!calls[0].contains(" & "), "{calls:?}");
+    }
+
+    #[test]
+    fn queue_book_sends_id_and_type() {
+        let calls = serve(
+            |_| Some((200, "OK".to_string())),
+            || block(ll().queue_book("GB1", "AudioBook")).unwrap(),
+        );
+        assert_eq!(calls, vec!["cmd=queueBook&id=GB1&type=AudioBook"]);
+    }
+
+    #[test]
+    fn a_command_fails_unless_upstream_answers_ok() {
+        serve(
+            |_| Some((200, "Invalid id: GB404".to_string())),
+            || {
+                let e = block(ll().queue_book("GB404", "eBook")).unwrap_err();
+                assert!(e.to_string().contains("Invalid id"), "{e}");
+            },
+        );
+    }
+
+    #[test]
+    fn api_refusals_in_a_200_surface_as_errors() {
+        serve(
+            |_| {
+                Some((
+                    200,
+                    json!({"Success": false, "Data": "", "Error": {"Code": 405, "Message": "Command: queueBook not available with read-only api access key"}})
+                        .to_string(),
+                ))
+            },
+            || {
+                let e = block(ll().books(&[])).unwrap_err().to_string();
+                assert!(e.contains("read-only"), "{e}");
+            },
+        );
+    }
+
+    #[test]
+    fn error_bodies_are_truncated_scrubbed_and_keyless() {
+        serve(
+            |_| {
+                Some((
+                    500,
+                    format!(
+                        r#"{{"apikey":"{KEY}","password":"hunter2hunter2","pad":"{}"}}"#,
+                        "x".repeat(2000)
+                    ),
+                ))
+            },
+            || {
+                let e = block(ll().books(&[])).unwrap_err().to_string();
+                assert!(e.contains("HTTP 500"), "{e}");
+                assert!(e.len() < 400, "{}", e.len());
+                assert!(!e.contains(KEY), "{e}");
+                assert!(!e.contains("hunter2hunter2"), "{e}");
+            },
+        );
+    }
+
+    #[test]
+    fn connect_fails_when_the_api_key_secret_is_missing() {
+        let caps = Arc::new(Mutex::new(Vec::new()));
+        let log = caps.clone();
+        let e = plugin_toolkit::capsink::with_cap_sink(
+            Box::new(move |cap: &str, _: &str| {
+                log.lock().unwrap().push(cap.to_string());
+                match cap {
+                    "secret.op" => Ok(json!({"value": null}).to_string()),
+                    _ => Err(format!("unexpected {cap}")),
+                }
+            }),
+            || block(tools::connect("ll")).err().unwrap(),
+        );
+        assert!(format!("{e:#}").contains("lazylibrarian"), "{e:#}");
+        assert_eq!(*caps.lock().unwrap(), vec!["secret.op"]);
     }
 }
