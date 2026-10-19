@@ -39,18 +39,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
-name = "arrayref"
-version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb"
-
-[[package]]
-name = "arrayvec"
-version = "0.7.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f02882884d3e1bc524fb12c79f107f6ad0e1cfd498c536ffb494301740995dfe"
-
-[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -78,20 +66,6 @@ name = "bitflags"
 version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
-
-[[package]]
-name = "blake3"
-version = "1.8.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0aa83c34e62843d924f905e0f5c866eb1dd6545fc4d719e803d9ba6030371fce"
-dependencies = [
- "arrayref",
- "arrayvec",
- "cc",
- "cfg-if",
- "constant_time_eq",
- "cpufeatures 0.3.0",
-]
 
 [[package]]
 name = "block-buffer"
@@ -207,12 +181,6 @@ name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
-
-[[package]]
-name = "constant_time_eq"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "core-foundation-sys"
@@ -660,7 +628,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 [[package]]
 name = "orca-contract"
 version = "0.2.1-rc.21"
-source = "git+https://github.com/argyle-labs/orca?branch=main#219eb32178e42ffb8aef0ecb7b99167b810a8491"
+source = "git+https://gitea.scottkey.me/argyle-labs/orca.git?branch=feat%2Fhttp-request-max-body#ef339523c5515afccc6195f8c086f0b4ff89e0d1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -678,7 +646,7 @@ dependencies = [
 [[package]]
 name = "orca-deploy-target"
 version = "0.2.1-rc.21"
-source = "git+https://github.com/argyle-labs/orca?branch=main#219eb32178e42ffb8aef0ecb7b99167b810a8491"
+source = "git+https://gitea.scottkey.me/argyle-labs/orca.git?branch=feat%2Fhttp-request-max-body#ef339523c5515afccc6195f8c086f0b4ff89e0d1"
 dependencies = [
  "async-trait",
  "orca-plugin-abi",
@@ -691,8 +659,9 @@ dependencies = [
 [[package]]
 name = "orca-derive"
 version = "0.2.1-rc.21"
-source = "git+https://github.com/argyle-labs/orca?branch=main#219eb32178e42ffb8aef0ecb7b99167b810a8491"
+source = "git+https://gitea.scottkey.me/argyle-labs/orca.git?branch=feat%2Fhttp-request-max-body#ef339523c5515afccc6195f8c086f0b4ff89e0d1"
 dependencies = [
+ "orca-verb-shape",
  "proc-macro2",
  "quote",
  "syn",
@@ -701,13 +670,14 @@ dependencies = [
 [[package]]
 name = "orca-dispatch"
 version = "0.2.1-rc.21"
-source = "git+https://github.com/argyle-labs/orca?branch=main#219eb32178e42ffb8aef0ecb7b99167b810a8491"
+source = "git+https://gitea.scottkey.me/argyle-labs/orca.git?branch=feat%2Fhttp-request-max-body#ef339523c5515afccc6195f8c086f0b4ff89e0d1"
 dependencies = [
  "anyhow",
  "clap",
  "futures",
  "inventory",
  "orca-contract",
+ "orca-verb-shape",
  "schemars",
  "serde",
  "serde_json",
@@ -720,7 +690,7 @@ dependencies = [
 [[package]]
 name = "orca-macro-runtime"
 version = "0.2.1-rc.21"
-source = "git+https://github.com/argyle-labs/orca?branch=main#219eb32178e42ffb8aef0ecb7b99167b810a8491"
+source = "git+https://gitea.scottkey.me/argyle-labs/orca.git?branch=feat%2Fhttp-request-max-body#ef339523c5515afccc6195f8c086f0b4ff89e0d1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -739,7 +709,7 @@ dependencies = [
 [[package]]
 name = "orca-media"
 version = "0.2.1-rc.21"
-source = "git+https://github.com/argyle-labs/orca?branch=main#219eb32178e42ffb8aef0ecb7b99167b810a8491"
+source = "git+https://gitea.scottkey.me/argyle-labs/orca.git?branch=feat%2Fhttp-request-max-body#ef339523c5515afccc6195f8c086f0b4ff89e0d1"
 dependencies = [
  "orca-derive",
  "orca-utils",
@@ -752,7 +722,7 @@ dependencies = [
 [[package]]
 name = "orca-plugin-abi"
 version = "0.1.0"
-source = "git+https://github.com/argyle-labs/orca?branch=main#219eb32178e42ffb8aef0ecb7b99167b810a8491"
+source = "git+https://gitea.scottkey.me/argyle-labs/orca.git?branch=feat%2Fhttp-request-max-body#ef339523c5515afccc6195f8c086f0b4ff89e0d1"
 dependencies = [
  "schemars",
  "serde",
@@ -761,7 +731,7 @@ dependencies = [
 [[package]]
 name = "orca-plugin-proto"
 version = "0.2.1-rc.21"
-source = "git+https://github.com/argyle-labs/orca?branch=main#219eb32178e42ffb8aef0ecb7b99167b810a8491"
+source = "git+https://gitea.scottkey.me/argyle-labs/orca.git?branch=feat%2Fhttp-request-max-body#ef339523c5515afccc6195f8c086f0b4ff89e0d1"
 dependencies = [
  "serde",
  "serde_json",
@@ -771,7 +741,7 @@ dependencies = [
 [[package]]
 name = "orca-plugin-toolkit"
 version = "0.2.1-rc.21"
-source = "git+https://github.com/argyle-labs/orca?branch=main#219eb32178e42ffb8aef0ecb7b99167b810a8491"
+source = "git+https://gitea.scottkey.me/argyle-labs/orca.git?branch=feat%2Fhttp-request-max-body#ef339523c5515afccc6195f8c086f0b4ff89e0d1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -803,7 +773,7 @@ dependencies = [
 [[package]]
 name = "orca-service"
 version = "0.2.1-rc.21"
-source = "git+https://github.com/argyle-labs/orca?branch=main#219eb32178e42ffb8aef0ecb7b99167b810a8491"
+source = "git+https://gitea.scottkey.me/argyle-labs/orca.git?branch=feat%2Fhttp-request-max-body#ef339523c5515afccc6195f8c086f0b4ff89e0d1"
 dependencies = [
  "orca-contract",
  "orca-deploy-target",
@@ -818,7 +788,7 @@ dependencies = [
 [[package]]
 name = "orca-storage"
 version = "0.2.1-rc.21"
-source = "git+https://github.com/argyle-labs/orca?branch=main#219eb32178e42ffb8aef0ecb7b99167b810a8491"
+source = "git+https://gitea.scottkey.me/argyle-labs/orca.git?branch=feat%2Fhttp-request-max-body#ef339523c5515afccc6195f8c086f0b4ff89e0d1"
 dependencies = [
  "orca-derive",
  "orca-utils",
@@ -831,11 +801,10 @@ dependencies = [
 [[package]]
 name = "orca-utils"
 version = "0.2.1-rc.21"
-source = "git+https://github.com/argyle-labs/orca?branch=main#219eb32178e42ffb8aef0ecb7b99167b810a8491"
+source = "git+https://gitea.scottkey.me/argyle-labs/orca.git?branch=feat%2Fhttp-request-max-body#ef339523c5515afccc6195f8c086f0b4ff89e0d1"
 dependencies = [
  "anyhow",
  "base64",
- "blake3",
  "chrono",
  "orca-derive",
  "rand",
@@ -847,10 +816,16 @@ dependencies = [
  "tempfile",
  "thiserror",
  "time",
+ "tokio",
  "urlencoding",
  "uuid",
  "zeroize",
 ]
+
+[[package]]
+name = "orca-verb-shape"
+version = "0.2.1-rc.21"
+source = "git+https://gitea.scottkey.me/argyle-labs/orca.git?branch=feat%2Fhttp-request-max-body#ef339523c5515afccc6195f8c086f0b4ff89e0d1"
 
 [[package]]
 name = "parking_lot"

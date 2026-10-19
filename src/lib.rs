@@ -327,6 +327,34 @@ mod tests {
     }
 
     #[test]
+    fn getallbooks_requests_64_mib_body_limit() {
+        let limits = Arc::new(Mutex::new(Vec::new()));
+        let log = limits.clone();
+        plugin_toolkit::capsink::with_cap_sink(
+            Box::new(move |_cap: &str, req: &str| {
+                let req: serde_json::Value = serde_json::from_str(req).unwrap();
+                let url = req["url"].as_str().unwrap();
+                log.lock().unwrap().push((
+                    url.contains("cmd=getAllBooks"),
+                    req["max_body_bytes"].clone(),
+                ));
+                Ok(json!({"status": 200, "headers": [], "body": b"[]".to_vec()}).to_string())
+            }),
+            || {
+                block(ll().books(&[])).unwrap();
+                block(ll().authors()).unwrap();
+            },
+        );
+        assert_eq!(
+            *limits.lock().unwrap(),
+            vec![
+                (true, json!(64 * 1024 * 1024)),
+                (false, serde_json::Value::Null)
+            ]
+        );
+    }
+
+    #[test]
     fn find_book_percent_encodes_the_name() {
         let calls = serve(
             |_| {
