@@ -5,6 +5,8 @@ use plugin_toolkit::progenitor_client::QueryParam;
 use plugin_toolkit::reqwest::Client as HttpClient;
 use plugin_toolkit::serde_json::{self, Value};
 
+const ALL_BOOKS_MAX_BODY: u64 = 64 * 1024 * 1024;
+
 pub struct Ll {
     base_url: String,
     api_key: String,
@@ -49,7 +51,12 @@ impl Ll {
         &self.base_url
     }
 
-    async fn send(&self, cmd: &str, params: &[(&str, &str)]) -> Result<String> {
+    async fn send(
+        &self,
+        cmd: &str,
+        params: &[(&str, &str)],
+        max_body: Option<u64>,
+    ) -> Result<String> {
         let req = params.iter().fold(
             self.http
                 .get(format!("{}/api", self.base_url))
@@ -57,6 +64,10 @@ impl Ll {
                 .query(&QueryParam::new("cmd", &cmd)),
             |r, (k, v)| r.query(&QueryParam::new(k, v)),
         );
+        let req = match max_body {
+            Some(bytes) => req.max_body(bytes),
+            None => req,
+        };
         let resp = req
             .send()
             .await
@@ -73,7 +84,16 @@ impl Ll {
     }
 
     pub async fn call(&self, cmd: &str, params: &[(&str, &str)]) -> Result<Value> {
-        let body = self.send(cmd, params).await?;
+        self.call_with(cmd, params, None).await
+    }
+
+    async fn call_with(
+        &self,
+        cmd: &str,
+        params: &[(&str, &str)],
+        max_body: Option<u64>,
+    ) -> Result<Value> {
+        let body = self.send(cmd, params, max_body).await?;
         let Ok(v) = serde_json::from_str::<Value>(&body) else {
             bail!("{cmd}: {}", self.excerpt(&body));
         };
@@ -85,7 +105,7 @@ impl Ll {
     }
 
     pub async fn command(&self, cmd: &str, params: &[(&str, &str)]) -> Result<()> {
-        let body = self.send(cmd, params).await?;
+        let body = self.send(cmd, params, None).await?;
         if body.trim() != "OK" {
             bail!("{cmd}: {}", self.excerpt(&body));
         }
@@ -98,7 +118,9 @@ impl Ll {
     }
 
     pub async fn books(&self, params: &[(&str, &str)]) -> Result<Vec<Book>> {
-        let v = self.call("getAllBooks", params).await?;
+        let v = self
+            .call_with("getAllBooks", params, Some(ALL_BOOKS_MAX_BODY))
+            .await?;
         Ok(rows(&v).iter().map(parse_book).collect())
     }
 
