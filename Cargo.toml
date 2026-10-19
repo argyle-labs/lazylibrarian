@@ -17,7 +17,7 @@ name = "lazylibrarian"
 path = "src/main.rs"
 
 [dependencies]
-plugin-toolkit = { git = "https://gitea.scottkey.me/argyle-labs/orca.git", branch = "feat/http-request-max-body", package = "orca-plugin-toolkit", default-features = false, features = ["tools", "db", "delegated-http"] }
+plugin-toolkit = { git = "https://github.com/argyle-labs/orca", rev = "ee18026e98c06ea897e6125d907092f8d1e10a65", package = "orca-plugin-toolkit", default-features = false, features = ["tools", "db", "delegated-http"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt"] }
