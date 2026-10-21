@@ -92,6 +92,8 @@ need `admin`; writes run when called and accept `dryRun` for a preview.
 | `lazylibrarian.books.want` | `queueBook` (`type=eBook`/`AudioBook`) |
 | `lazylibrarian.wanted.search` | `forceBookSearch` |
 | `lazylibrarian.library.scan` | `forceLibraryScan`, `forceAudioBookScan` |
+| `lazylibrarian.books.skip` | `unqueueBook` (`type=eBook`/`AudioBook`), marks Skipped |
+| `lazylibrarian.downloads.process` | `forceProcess` (`dir`, `ignoreclient`) |
 
 `books.list` takes `limit`. `parity.list` and the media `units` read the whole
 `getAllBooks` table: upstream offers `limit` without an offset, so a partial read

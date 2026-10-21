@@ -383,6 +383,35 @@ mod tests {
     }
 
     #[test]
+    fn unqueue_book_sends_id_and_type() {
+        let calls = serve(
+            |_| Some((200, "OK".to_string())),
+            || block(ll().unqueue_book("GB1", "eBook")).unwrap(),
+        );
+        assert_eq!(calls, vec!["cmd=unqueueBook&id=GB1&type=eBook"]);
+        serve(
+            |_| None,
+            || assert!(block(ll().unqueue_book("1&cmd=x", "eBook")).is_err()),
+        );
+    }
+
+    #[test]
+    fn force_process_sends_only_given_options() {
+        let calls = serve(
+            |_| Some((200, "OK".to_string())),
+            || {
+                block(ll().force_process(None, false)).unwrap();
+                block(ll().force_process(Some("/downloads/books"), true)).unwrap();
+            },
+        );
+        assert_eq!(calls[0], "cmd=forceProcess");
+        assert!(
+            calls[1].starts_with("cmd=forceProcess&dir=") && calls[1].ends_with("&ignoreclient=1"),
+            "{calls:?}"
+        );
+    }
+
+    #[test]
     fn a_command_fails_unless_upstream_answers_ok() {
         serve(
             |_| Some((200, "Invalid id: GB404".to_string())),

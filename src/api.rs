@@ -135,6 +135,23 @@ impl Ll {
             .await
     }
 
+    pub async fn unqueue_book(&self, book_id: &str, library: &str) -> Result<()> {
+        check_id(book_id)?;
+        self.command("unqueueBook", &[("id", book_id), ("type", library)])
+            .await
+    }
+
+    pub async fn force_process(&self, dir: Option<&str>, ignore_client: bool) -> Result<()> {
+        let mut params = Vec::new();
+        if let Some(d) = dir {
+            params.push(("dir", d));
+        }
+        if ignore_client {
+            params.push(("ignoreclient", "1"));
+        }
+        self.command("forceProcess", &params).await
+    }
+
     pub async fn force_search(&self, library: Option<&str>) -> Result<()> {
         match library {
             Some(ty) => self.command("forceBookSearch", &[("type", ty)]).await,

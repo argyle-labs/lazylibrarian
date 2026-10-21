@@ -319,6 +319,118 @@ async fn lazylibrarian_library_scan(args: ScanArgs, _ctx: &ToolCtx) -> Result<Sc
     scan_library(&connect(&args.name).await?, &args).await
 }
 
+#[orca_struct(args)]
+pub struct SkipArgs {
+    /// Registered lazylibrarian endpoint name.
+    #[arg(long)]
+    pub name: String,
+    /// Book ids to mark Skipped. Comma-separated on the CLI.
+    #[arg(long, value_delimiter = ',', required = true)]
+    pub book_ids: Vec<String>,
+    /// Which format to mark Skipped.
+    #[arg(long, value_enum, default_value_t = Format::Ebook)]
+    #[serde(default)]
+    pub format: Format,
+}
+
+#[orca_struct]
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkipResult {
+    pub id: String,
+    pub format: Format,
+    pub skipped: bool,
+    pub error: Option<String>,
+}
+
+#[orca_struct]
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkipReport {
+    pub results: Vec<SkipResult>,
+}
+
+pub async fn skip_books(ll: &Ll, args: &SkipArgs) -> Result<SkipReport> {
+    if args.book_ids.is_empty() {
+        bail!("pass at least one book id");
+    }
+    for id in &args.book_ids {
+        check_id(id)?;
+    }
+    let mut report = SkipReport {
+        results: Vec::new(),
+    };
+    for id in &args.book_ids {
+        for format in args.format.singles() {
+            let result = ll.unqueue_book(id, format.ll_types()[0]).await;
+            report.results.push(SkipResult {
+                id: id.clone(),
+                format,
+                skipped: result.is_ok(),
+                error: result.err().map(|e| format!("{e:#}")),
+            });
+        }
+    }
+    Ok(report)
+}
+
+/// Mark books Skipped for the ebook, audiobook or both (`unqueueBook`), so
+/// searches stop grabbing a book whose releases keep failing. LazyLibrarian's
+/// API has no per-release blocklist; this is its skip.
+#[orca_tool(
+    domain = "lazylibrarian",
+    verb = "books.skip",
+    role = "admin",
+    execute_gated = true
+)]
+async fn lazylibrarian_books_skip(args: SkipArgs, _ctx: &ToolCtx) -> Result<SkipReport> {
+    skip_books(&connect(&args.name).await?, &args).await
+}
+
+#[orca_struct(args)]
+pub struct ProcessArgs {
+    /// Registered lazylibrarian endpoint name.
+    #[arg(long)]
+    pub name: String,
+    /// Directory on the LazyLibrarian host to import from. Omitted, its
+    /// configured download directories.
+    #[arg(long)]
+    pub dir: Option<String>,
+    /// Import without checking the download client's state.
+    #[arg(long)]
+    #[serde(default)]
+    pub ignore_client: bool,
+}
+
+#[orca_struct]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProcessReport {
+    pub dir: Option<String>,
+    pub processed: bool,
+}
+
+pub async fn process_downloads(ll: &Ll, args: &ProcessArgs) -> Result<ProcessReport> {
+    ll.force_process(args.dir.as_deref(), args.ignore_client)
+        .await?;
+    Ok(ProcessReport {
+        dir: args.dir.clone(),
+        processed: true,
+    })
+}
+
+/// Import completed downloads into the library (`forceProcess`). Runs to
+/// completion before returning.
+#[orca_tool(
+    domain = "lazylibrarian",
+    verb = "downloads.process",
+    role = "admin",
+    execute_gated = true
+)]
+async fn lazylibrarian_downloads_process(
+    args: ProcessArgs,
+    _ctx: &ToolCtx,
+) -> Result<ProcessReport> {
+    process_downloads(&connect(&args.name).await?, &args).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +466,8 @@ mod tests {
             "lazylibrarian.books.want",
             "lazylibrarian.wanted.search",
             "lazylibrarian.library.scan",
+            "lazylibrarian.books.skip",
+            "lazylibrarian.downloads.process",
         ] {
             assert_eq!(role(n), Some("admin"), "{n}");
             assert!(gated.contains(&n), "{n}");
