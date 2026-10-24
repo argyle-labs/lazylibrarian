@@ -1,7 +1,2 @@
-[net]
-git-fetch-with-cli = true
-
-# orca's crates declare sibling deps with `registry = "gitea"`; cargo skips
-# their manifests from the git source unless the registry is defined here.
 [registries.gitea]
 index = "sparse+https://gitea.scottkey.me/api/packages/argyle-labs/cargo/"
