@@ -17,7 +17,7 @@ name = "lazylibrarian"
 path = "src/main.rs"
 
 [dependencies]
-plugin-toolkit = { version = "=0.2.1-rc.47", registry = "gitea", package = "orca-plugin-toolkit", default-features = false, features = ["tools", "db", "delegated-http"] }
+plugin-toolkit = { version = ">=0.2.1-rc.47", registry = "gitea", package = "orca-plugin-toolkit", default-features = false, features = ["tools", "db", "delegated-http"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt"] }
