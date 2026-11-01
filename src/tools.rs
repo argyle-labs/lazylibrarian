@@ -89,23 +89,36 @@ pub struct BooksArgs {
     /// Only books with this audiobook status.
     #[arg(long)]
     pub audio_status: Option<String>,
-    /// Only books by this author id.
+    /// Only books by this author id (`getAuthor`, bounded to that author).
     #[arg(long)]
     pub author_id: Option<String>,
-    /// Return at most this many books (upstream `limit`, applied before the author filter).
+    /// Return at most this many books, applied after every filter.
     #[arg(long)]
     pub limit: Option<u32>,
 }
 
+fn filter_author_books(books: Vec<Book>, args: &BooksArgs) -> Vec<Book> {
+    let matches = |want: &Option<String>, have: &Option<String>| {
+        want.as_deref()
+            .is_none_or(|w| have.as_deref().is_some_and(|h| h.eq_ignore_ascii_case(w)))
+    };
+    books
+        .into_iter()
+        .filter(|b| matches(&args.status, &b.ebook_status))
+        .filter(|b| matches(&args.audio_status, &b.audio_status))
+        .take(args.limit.map_or(usize::MAX, |n| n as usize))
+        .collect()
+}
+
 pub async fn list_books(ll: &Ll, args: &BooksArgs) -> Result<Vec<Book>> {
     if let Some(id) = &args.author_id {
-        check_id(id)?;
+        return Ok(filter_author_books(ll.author_books(id).await?, args));
     }
     if args.status.is_none() && args.audio_status.is_none() && args.limit.is_none() {
         let statuses: Vec<&str> = parity::STATUSES.iter().map(|(s, _)| *s).collect();
         bail!(
-            "pass --status, --audio-status or --limit; an unfiltered getAllBooks is unbounded \
-             (statuses: {}, Skipped)",
+            "pass --status, --audio-status, --author-id or --limit; an unfiltered getAllBooks is \
+             unbounded (statuses: {}, Skipped)",
             statuses.join(", ")
         );
     }
@@ -120,15 +133,12 @@ pub async fn list_books(ll: &Ll, args: &BooksArgs) -> Result<Vec<Book>> {
     if let Some(n) = &limit {
         params.push(("limit", n.as_str()));
     }
-    let mut books = ll.books(&params).await?;
-    if let Some(id) = &args.author_id {
-        books.retain(|b| b.author_id.as_deref() == Some(id.as_str()));
-    }
-    Ok(books)
+    ll.books(&params).await
 }
 
 /// List books with ebook and audiobook status, ISBN, author, language and
-/// publication date (`getAllBooks`). Requires a status, audio status or limit.
+/// publication date (`getAllBooks`, or `getAuthor` with an author id). Requires a status, audio
+/// status, author id or limit.
 #[orca_tool(domain = "lazylibrarian", verb = "books.list", role = "read")]
 async fn lazylibrarian_books_list(args: BooksArgs, _ctx: &ToolCtx) -> Result<Vec<Book>> {
     list_books(&connect(&args.name).await?, &args).await
@@ -474,6 +484,56 @@ mod tests {
             "endpoint ll has no routes; set routes (base_url is no longer used)"
         );
         assert!(require_routes("ll", &["http://ll.test".to_string()]).is_ok());
+    }
+
+    fn book(id: &str, ebook: Option<&str>, audio: Option<&str>) -> Book {
+        Book {
+            id: id.to_string(),
+            title: id.to_string(),
+            subtitle: None,
+            author_id: Some("A1".to_string()),
+            author: None,
+            isbn: None,
+            language: None,
+            published: None,
+            ebook_status: ebook.map(str::to_string),
+            audio_status: audio.map(str::to_string),
+        }
+    }
+
+    fn books_args(status: Option<&str>, audio: Option<&str>, limit: Option<u32>) -> BooksArgs {
+        BooksArgs {
+            name: "ll".to_string(),
+            status: status.map(str::to_string),
+            audio_status: audio.map(str::to_string),
+            author_id: Some("A1".to_string()),
+            limit,
+        }
+    }
+
+    #[test]
+    fn author_books_filter_by_status_then_limit() {
+        let all = vec![
+            book("B1", Some("Skipped"), Some("Wanted")),
+            book("B2", Some("Open"), None),
+            book("B3", Some("open"), Some("Wanted")),
+            book("B4", Some("Open"), Some("Open")),
+        ];
+        let ids = |a: &BooksArgs| -> Vec<String> {
+            filter_author_books(all.clone(), a)
+                .into_iter()
+                .map(|b| b.id)
+                .collect()
+        };
+        assert_eq!(ids(&books_args(None, None, None)).len(), 4);
+        assert_eq!(
+            ids(&books_args(Some("Open"), None, None)),
+            ["B2", "B3", "B4"]
+        );
+        assert_eq!(ids(&books_args(Some("Open"), None, Some(2))), ["B2", "B3"]);
+        assert_eq!(ids(&books_args(None, Some("Wanted"), None)), ["B1", "B3"]);
+        assert_eq!(ids(&books_args(Some("Open"), Some("Wanted"), None)), ["B3"]);
+        assert_eq!(ids(&books_args(None, None, Some(1))), ["B1"]);
     }
 
     #[test]

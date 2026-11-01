@@ -499,16 +499,12 @@ mod tests {
     }
 
     #[test]
-    fn books_list_filters_server_side_and_by_author() {
+    fn books_list_filters_server_side() {
         let calls = serve(
             |_| {
                 Some((
                     200,
-                    json!([
-                        {"BookID": "B1", "AuthorID": "A1", "Status": "Wanted"},
-                        {"BookID": "B2", "AuthorID": "A2", "Status": "Wanted"}
-                    ])
-                    .to_string(),
+                    json!([{"BookID": "B1", "Status": "Wanted"}]).to_string(),
                 ))
             },
             || {
@@ -516,18 +512,54 @@ mod tests {
                     name: "ll".into(),
                     status: Some("Wanted".into()),
                     audio_status: Some("Skipped".into()),
-                    author_id: Some("A1".into()),
+                    author_id: None,
                     limit: Some(50),
                 };
-                let got = block(tools::list_books(&ll(), &args)).unwrap();
-                assert_eq!(got.len(), 1);
-                assert_eq!(got[0].id, "B1");
+                assert_eq!(block(tools::list_books(&ll(), &args)).unwrap()[0].id, "B1");
             },
         );
         assert_eq!(
             calls,
             vec!["cmd=getAllBooks&status=Wanted&audiostatus=Skipped&limit=50"]
         );
+    }
+
+    #[test]
+    fn books_list_by_author_uses_getauthor_and_limits_after_filtering() {
+        let calls = serve(
+            |_| {
+                Some((
+                    200,
+                    json!({
+                        "author": [{"AuthorID": "A1", "AuthorName": "N"}],
+                        "books": [
+                            {"BookID": "B1", "AuthorID": "A1", "Status": "Skipped"},
+                            {"BookID": "B2", "AuthorID": "A1", "Status": "Wanted"},
+                            {"BookID": "B3", "AuthorID": "A1", "Status": "Wanted"},
+                            {"BookID": "B4", "AuthorID": "A1", "Status": "Wanted"}
+                        ]
+                    })
+                    .to_string(),
+                ))
+            },
+            || {
+                let mut args = tools::BooksArgs {
+                    name: "ll".into(),
+                    status: None,
+                    audio_status: None,
+                    author_id: Some("A1".into()),
+                    limit: None,
+                };
+                assert_eq!(block(tools::list_books(&ll(), &args)).unwrap().len(), 4);
+                args.status = Some("Wanted".into());
+                args.limit = Some(2);
+                let got = block(tools::list_books(&ll(), &args)).unwrap();
+                let ids: Vec<_> = got.iter().map(|b| b.id.as_str()).collect();
+                assert_eq!(ids, ["B2", "B3"]);
+                assert_eq!(got[0].author.as_deref(), Some("N"));
+            },
+        );
+        assert_eq!(calls, vec!["cmd=getAuthor&id=A1", "cmd=getAuthor&id=A1"]);
     }
 
     #[test]
@@ -539,13 +571,14 @@ mod tests {
                     name: "ll".into(),
                     status: None,
                     audio_status: None,
-                    author_id: Some("A1".into()),
+                    author_id: None,
                     limit: None,
                 };
                 let err = block(tools::list_books(&ll(), &args))
                     .unwrap_err()
                     .to_string();
                 assert!(err.contains("--status"), "{err}");
+                assert!(err.contains("--author-id"), "{err}");
                 for (status, _) in parity::STATUSES {
                     assert!(err.contains(status), "{err}");
                 }

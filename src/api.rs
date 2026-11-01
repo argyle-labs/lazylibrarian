@@ -150,6 +150,14 @@ impl Ll {
         Ok(rows(&v).iter().map(parse_book).collect())
     }
 
+    pub async fn author_books(&self, author_id: &str) -> Result<Vec<Book>> {
+        check_id(author_id)?;
+        let v = self
+            .call_with("getAuthor", &[("id", author_id)], Some(ALL_BOOKS_MAX_BODY))
+            .await?;
+        Ok(parse_author_books(&v))
+    }
+
     pub async fn find_books(&self, name: &str) -> Result<Vec<Book>> {
         let v = self.call("findBook", &[("name", name)]).await?;
         Ok(rows(&v).iter().map(parse_book).collect())
@@ -310,9 +318,45 @@ pub fn parse_book(row: &Value) -> Book {
     }
 }
 
+/// `getAuthor` answers `{"author": [row], "books": [rows]}`; its book rows come
+/// from the bare `books` table, so the author name is taken from the author row.
+pub fn parse_author_books(v: &Value) -> Vec<Book> {
+    let author = v
+        .get("author")
+        .map(|a| a.as_array().and_then(|r| r.first()).unwrap_or(a))
+        .and_then(|row| opt_str(field(row, "AuthorName")));
+    v.get("books")
+        .map(rows)
+        .unwrap_or(&[])
+        .iter()
+        .map(|row| {
+            let mut b = parse_book(row);
+            if b.author.is_none() {
+                b.author = author.clone();
+            }
+            b
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn author_books_decode_getauthor_and_carry_author_name() {
+        let books = parse_author_books(&json!({
+            "author": [{"AuthorID": "A1", "AuthorName": "Brandon Sanderson"}],
+            "books": [
+                {"BookID": "B1", "BookName": "Elantris", "AuthorID": "A1", "Status": "Open"},
+                {"BookID": "B2", "BookName": "Warbreaker", "AuthorID": "A1", "AudioStatus": "Wanted"}
+            ]
+        }));
+        assert_eq!(books.len(), 2);
+        assert_eq!(books[0].author.as_deref(), Some("Brandon Sanderson"));
+        assert_eq!(books[1].audio_status.as_deref(), Some("Wanted"));
+        assert!(parse_author_books(&json!({"author": [], "books": []})).is_empty());
+    }
 
     #[test]
     fn book_decodes_getallbooks_row() {
