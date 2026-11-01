@@ -499,16 +499,12 @@ mod tests {
     }
 
     #[test]
-    fn books_list_filters_server_side_and_by_author() {
+    fn books_list_filters_server_side() {
         let calls = serve(
             |_| {
                 Some((
                     200,
-                    json!([
-                        {"BookID": "B1", "AuthorID": "A1", "Status": "Wanted"},
-                        {"BookID": "B2", "AuthorID": "A2", "Status": "Wanted"}
-                    ])
-                    .to_string(),
+                    json!([{"BookID": "B1", "Status": "Wanted"}]).to_string(),
                 ))
             },
             || {
@@ -516,18 +512,216 @@ mod tests {
                     name: "ll".into(),
                     status: Some("Wanted".into()),
                     audio_status: Some("Skipped".into()),
-                    author_id: Some("A1".into()),
+                    author_id: None,
                     limit: Some(50),
                 };
-                let got = block(tools::list_books(&ll(), &args)).unwrap();
-                assert_eq!(got.len(), 1);
-                assert_eq!(got[0].id, "B1");
+                assert_eq!(block(tools::list_books(&ll(), &args)).unwrap()[0].id, "B1");
             },
         );
         assert_eq!(
             calls,
             vec!["cmd=getAllBooks&status=Wanted&audiostatus=Skipped&limit=50"]
         );
+    }
+
+    #[test]
+    fn books_list_by_author_uses_getauthor_and_limits_after_filtering() {
+        let calls = serve(
+            |_| {
+                Some((
+                    200,
+                    json!({
+                        "author": [{"AuthorID": "A1", "AuthorName": "N"}],
+                        "books": [
+                            {"BookID": "B1", "AuthorID": "A1", "Status": "Skipped"},
+                            {"BookID": "B2", "AuthorID": "A1", "Status": "Wanted"},
+                            {"BookID": "B3", "AuthorID": "A1", "Status": "Wanted"},
+                            {"BookID": "B4", "AuthorID": "A1", "Status": "Wanted"}
+                        ]
+                    })
+                    .to_string(),
+                ))
+            },
+            || {
+                let mut args = tools::BooksArgs {
+                    name: "ll".into(),
+                    status: None,
+                    audio_status: None,
+                    author_id: Some("A1".into()),
+                    limit: None,
+                };
+                assert_eq!(block(tools::list_books(&ll(), &args)).unwrap().len(), 4);
+                args.status = Some("Wanted".into());
+                args.limit = Some(2);
+                let got = block(tools::list_books(&ll(), &args)).unwrap();
+                let ids: Vec<_> = got.iter().map(|b| b.id.as_str()).collect();
+                assert_eq!(ids, ["B2", "B3"]);
+                assert_eq!(got[0].author.as_deref(), Some("N"));
+            },
+        );
+        assert_eq!(calls, vec!["cmd=getAuthor&id=A1", "cmd=getAuthor&id=A1"]);
+    }
+
+    #[test]
+    fn books_list_refuses_unbounded_call() {
+        let calls = serve(
+            |_| Some((200, "[]".into())),
+            || {
+                let args = tools::BooksArgs {
+                    name: "ll".into(),
+                    status: None,
+                    audio_status: None,
+                    author_id: None,
+                    limit: None,
+                };
+                let err = block(tools::list_books(&ll(), &args))
+                    .unwrap_err()
+                    .to_string();
+                for name in [
+                    "status (--status)",
+                    "audio_status (--audio-status)",
+                    "author_id (--author-id)",
+                    "limit (--limit)",
+                ] {
+                    assert!(err.contains(name), "{err}");
+                }
+                for (status, _) in parity::STATUSES {
+                    assert!(err.contains(status), "{err}");
+                }
+            },
+        );
+        assert!(calls.is_empty(), "{calls:?}");
+    }
+
+    #[test]
+    fn books_list_limit_alone_is_bounded() {
+        let calls = serve(
+            |_| Some((200, "[]".into())),
+            || {
+                let args = tools::BooksArgs {
+                    name: "ll".into(),
+                    status: None,
+                    audio_status: None,
+                    author_id: None,
+                    limit: Some(10),
+                };
+                block(tools::list_books(&ll(), &args)).unwrap();
+            },
+        );
+        assert_eq!(calls, vec!["cmd=getAllBooks&limit=10"]);
+    }
+
+    #[test]
+    fn parity_queries_non_skipped_statuses_per_format_and_dedupes() {
+        let mut got = Vec::new();
+        let calls = serve(
+            |q| {
+                let body = match q {
+                    "cmd=getAllBooks&status=Open" => json!([
+                        {"BookID": "B1", "Status": "Open", "AudioStatus": "Skipped"},
+                        {"BookID": "B2", "Status": "Open", "AudioStatus": "Open"}
+                    ]),
+                    "cmd=getAllBooks&status=Wanted" => json!([
+                        {"BookID": "B3", "Status": "Wanted", "AudioStatus": "Open"}
+                    ]),
+                    "cmd=getAllBooks&audiostatus=Open" => json!([
+                        {"BookID": "B2", "Status": "Open", "AudioStatus": "Open"},
+                        {"BookID": "B3", "Status": "Wanted", "AudioStatus": "Open"}
+                    ]),
+                    q if q.starts_with("cmd=getAllBooks&") => json!([]),
+                    _ => return None,
+                };
+                Some((200, body.to_string()))
+            },
+            || {
+                let books = block(tools::parity_books(&ll(), false)).unwrap();
+                got = parity::parity(books, false);
+            },
+        );
+        assert!(!calls.contains(&"cmd=getAllBooks".to_string()), "{calls:?}");
+        assert!(!calls.iter().any(|c| c.contains("Ignored")), "{calls:?}");
+        assert_eq!(calls.len(), 10, "{calls:?}");
+        let ids: Vec<&str> = got.iter().map(|r| r.book.id.as_str()).collect();
+        assert_eq!(ids, vec!["B1", "B3"]);
+    }
+
+    #[test]
+    fn parity_include_ignored_also_queries_ignored() {
+        let calls = serve(
+            |_| Some((200, "[]".to_string())),
+            || {
+                block(tools::parity_books(&ll(), true)).unwrap();
+            },
+        );
+        assert!(calls.contains(&"cmd=getAllBooks&status=Ignored".to_string()));
+        assert!(calls.contains(&"cmd=getAllBooks&audiostatus=Ignored".to_string()));
+    }
+
+    #[test]
+    fn parity_queries_every_non_skipped_status_for_both_formats() {
+        let calls = serve(
+            |_| Some((200, "[]".to_string())),
+            || {
+                block(tools::parity_books(&ll(), true)).unwrap();
+            },
+        );
+        for (status, a) in parity::STATUSES {
+            assert_ne!(*a, parity::Availability::Skipped);
+            for key in ["status", "audiostatus"] {
+                let q = format!("cmd=getAllBooks&{key}={status}");
+                assert!(calls.contains(&q), "{q} missing from {calls:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn parity_finds_audio_only_book_via_audiostatus() {
+        let mut got = Vec::new();
+        serve(
+            |q| {
+                let body = match q {
+                    "cmd=getAllBooks&audiostatus=Have" => json!([
+                        {"BookID": "B9", "Status": "Skipped", "AudioStatus": "Have"}
+                    ]),
+                    q if q.starts_with("cmd=getAllBooks&") => json!([]),
+                    _ => return None,
+                };
+                Some((200, body.to_string()))
+            },
+            || {
+                let books = block(tools::parity_books(&ll(), false)).unwrap();
+                got = parity::parity(books, false);
+            },
+        );
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].book.id, "B9");
+        assert_eq!(got[0].gap, parity::ParityGap::EbookMissing);
+    }
+
+    #[test]
+    fn gateway_502_is_a_typed_upstream_error() {
+        let mut err = None;
+        serve(
+            |_| Some((502, "<html>502 Bad Gateway</html>".to_string())),
+            || err = block(ll().books(&[])).err(),
+        );
+        let err = err.unwrap();
+        let typed = err.downcast_ref::<api::UpstreamUnavailable>().unwrap();
+        assert_eq!(typed.status, 502);
+        assert_eq!(typed.cmd, "getAllBooks");
+        assert!(err.to_string().contains("upstream unavailable"), "{err}");
+    }
+
+    #[test]
+    fn non_gateway_http_errors_stay_plain() {
+        let mut err = None;
+        serve(
+            |_| Some((500, "boom".to_string())),
+            || err = block(ll().books(&[])).err(),
+        );
+        let err = err.unwrap();
+        assert!(err.downcast_ref::<api::UpstreamUnavailable>().is_none());
+        assert!(err.to_string().contains("HTTP 500"), "{err}");
     }
 
     #[test]

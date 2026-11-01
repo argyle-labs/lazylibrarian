@@ -38,6 +38,25 @@ pub struct Author {
     pub total_books: Option<u64>,
 }
 
+/// LazyLibrarian, or something in front of it, answered 502/503/504.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpstreamUnavailable {
+    pub cmd: String,
+    pub status: u16,
+}
+
+impl std::fmt::Display for UpstreamUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}: lazylibrarian upstream unavailable (HTTP {}): down or timed out",
+            self.cmd, self.status
+        )
+    }
+}
+
+impl std::error::Error for UpstreamUnavailable {}
+
 impl Ll {
     pub fn new(base_url: &str, api_key: &str) -> Self {
         Self {
@@ -73,6 +92,13 @@ impl Ll {
             .await
             .map_err(|e| anyhow!("{cmd}: {}", self.excerpt(&e.to_string())))?;
         let status = resp.status();
+        if matches!(status.as_u16(), 502..=504) {
+            return Err(UpstreamUnavailable {
+                cmd: cmd.to_string(),
+                status: status.as_u16(),
+            }
+            .into());
+        }
         let body = resp
             .text()
             .await
@@ -122,6 +148,14 @@ impl Ll {
             .call_with("getAllBooks", params, Some(ALL_BOOKS_MAX_BODY))
             .await?;
         Ok(rows(&v).iter().map(parse_book).collect())
+    }
+
+    pub async fn author_books(&self, author_id: &str) -> Result<Vec<Book>> {
+        check_id(author_id)?;
+        let v = self
+            .call_with("getAuthor", &[("id", author_id)], Some(ALL_BOOKS_MAX_BODY))
+            .await?;
+        parse_author_books(&v, author_id)
     }
 
     pub async fn find_books(&self, name: &str) -> Result<Vec<Book>> {
@@ -284,9 +318,71 @@ pub fn parse_book(row: &Value) -> Book {
     }
 }
 
+/// `getAuthor` answers `{"author": [row], "books": [rows]}`; its book rows come
+/// from the bare `books` table, so the author name is taken from the author row.
+pub fn parse_author_books(v: &Value, author_id: &str) -> Result<Vec<Book>> {
+    let row = match v.get("author") {
+        Some(Value::Array(r)) => r.first(),
+        Some(o @ Value::Object(m)) if !m.is_empty() => Some(o),
+        _ => None,
+    }
+    .ok_or_else(|| anyhow!("getAuthor: no author with id {author_id}"))?;
+    let author = opt_str(field(row, "AuthorName"));
+    Ok(v.get("books")
+        .map(rows)
+        .unwrap_or(&[])
+        .iter()
+        .map(|row| {
+            let mut b = parse_book(row);
+            if b.author.is_none() {
+                b.author = author.clone();
+            }
+            b
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn author_books_decode_getauthor_and_carry_author_name() {
+        let books = parse_author_books(
+            &json!({
+                "author": [{"AuthorID": "A1", "AuthorName": "Brandon Sanderson"}],
+                "books": [
+                    {"BookID": "B1", "BookName": "Elantris", "AuthorID": "A1", "Status": "Open"},
+                    {"BookID": "B2", "BookName": "Warbreaker", "AuthorID": "A1", "AudioStatus": "Wanted"}
+                ]
+            }),
+            "A1",
+        )
+        .unwrap();
+        assert_eq!(books.len(), 2);
+        assert_eq!(books[0].author.as_deref(), Some("Brandon Sanderson"));
+        assert_eq!(books[1].audio_status.as_deref(), Some("Wanted"));
+    }
+
+    #[test]
+    fn author_books_unknown_id_is_an_error() {
+        for v in [
+            json!({"author": [], "books": []}),
+            json!({"author": {}, "books": []}),
+            json!({"books": []}),
+        ] {
+            let err = parse_author_books(&v, "X9").unwrap_err().to_string();
+            assert_eq!(err, "getAuthor: no author with id X9");
+        }
+    }
+
+    #[test]
+    fn author_books_known_author_without_books_is_empty() {
+        let v = json!({"author": [{"AuthorID": "A1", "AuthorName": "N"}], "books": []});
+        assert!(parse_author_books(&v, "A1").unwrap().is_empty());
+        let v = json!({"author": {"AuthorID": "A1", "AuthorName": "N"}});
+        assert!(parse_author_books(&v, "A1").unwrap().is_empty());
+    }
 
     #[test]
     fn book_decodes_getallbooks_row() {

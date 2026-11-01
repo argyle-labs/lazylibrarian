@@ -22,13 +22,22 @@ pub enum Availability {
     Ignored,
 }
 
+/// Every LazyLibrarian status outside the `Skipped` bucket; anything absent maps to `Skipped`.
+pub const STATUSES: &[(&str, Availability)] = &[
+    ("Open", Availability::Have),
+    ("Have", Availability::Have),
+    ("Wanted", Availability::Wanted),
+    ("Snatched", Availability::Wanted),
+    ("Matched", Availability::Wanted),
+    ("Ignored", Availability::Ignored),
+];
+
 pub fn availability(status: Option<&str>) -> Availability {
-    match status.unwrap_or_default() {
-        "Open" | "Have" => Availability::Have,
-        "Wanted" | "Snatched" | "Matched" => Availability::Wanted,
-        "Ignored" => Availability::Ignored,
-        _ => Availability::Skipped,
-    }
+    let status = status.unwrap_or_default();
+    STATUSES
+        .iter()
+        .find(|(s, _)| *s == status)
+        .map_or(Availability::Skipped, |(_, a)| *a)
 }
 
 #[derive(
