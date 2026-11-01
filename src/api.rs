@@ -38,8 +38,7 @@ pub struct Author {
     pub total_books: Option<u64>,
 }
 
-/// The reverse proxy in front of LazyLibrarian answered 502/503/504: the
-/// upstream is down or did not respond before the proxy timed out.
+/// LazyLibrarian, or something in front of it, answered 502/503/504.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpstreamUnavailable {
     pub cmd: String,
@@ -50,7 +49,7 @@ impl std::fmt::Display for UpstreamUnavailable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}: lazylibrarian upstream unavailable (gateway HTTP {}); the server behind the reverse proxy is down or timed out",
+            "{}: lazylibrarian upstream unavailable: returned HTTP {}; it is unavailable or timed out",
             self.cmd, self.status
         )
     }
@@ -93,10 +92,6 @@ impl Ll {
             .await
             .map_err(|e| anyhow!("{cmd}: {}", self.excerpt(&e.to_string())))?;
         let status = resp.status();
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| anyhow!("{cmd}: {}", self.excerpt(&e.to_string())))?;
         if matches!(status.as_u16(), 502..=504) {
             return Err(UpstreamUnavailable {
                 cmd: cmd.to_string(),
@@ -104,6 +99,10 @@ impl Ll {
             }
             .into());
         }
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| anyhow!("{cmd}: {}", self.excerpt(&e.to_string())))?;
         if !status.is_success() {
             bail!("{cmd}: HTTP {} {}", status.as_u16(), self.excerpt(&body));
         }
