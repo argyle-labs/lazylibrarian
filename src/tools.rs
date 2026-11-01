@@ -145,16 +145,15 @@ async fn lazylibrarian_parity_list(args: ParityArgs, _ctx: &ToolCtx) -> Result<V
     Ok(parity::parity(books, args.include_ignored))
 }
 
-/// Statuses outside the `Skipped` availability bucket. A parity gap needs at
-/// least one format in one of these, so querying each per format covers every
-/// gap without pulling the Skipped/Skipped bulk of a large library.
-const PARITY_STATUSES: &[&str] = &["Open", "Have", "Wanted", "Snatched", "Matched"];
-
+/// A parity gap needs at least one format outside `Skipped`, so querying each
+/// such status per format covers every gap without pulling the Skipped/Skipped
+/// bulk of a large library.
 pub async fn parity_books(ll: &Ll, include_ignored: bool) -> Result<Vec<Book>> {
-    let mut statuses = PARITY_STATUSES.to_vec();
-    if include_ignored {
-        statuses.push("Ignored");
-    }
+    let statuses: Vec<&str> = parity::STATUSES
+        .iter()
+        .filter(|(_, a)| include_ignored || *a != parity::Availability::Ignored)
+        .map(|(s, _)| *s)
+        .collect();
     let mut seen = std::collections::HashSet::new();
     let mut books = Vec::new();
     for key in ["status", "audiostatus"] {

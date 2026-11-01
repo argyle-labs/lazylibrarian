@@ -577,6 +577,47 @@ mod tests {
     }
 
     #[test]
+    fn parity_queries_every_non_skipped_status_for_both_formats() {
+        let calls = serve(
+            |_| Some((200, "[]".to_string())),
+            || {
+                block(tools::parity_books(&ll(), true)).unwrap();
+            },
+        );
+        for (status, a) in parity::STATUSES {
+            assert_ne!(*a, parity::Availability::Skipped);
+            for key in ["status", "audiostatus"] {
+                let q = format!("cmd=getAllBooks&{key}={status}");
+                assert!(calls.contains(&q), "{q} missing from {calls:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn parity_finds_audio_only_book_via_audiostatus() {
+        let mut got = Vec::new();
+        serve(
+            |q| {
+                let body = match q {
+                    "cmd=getAllBooks&audiostatus=Have" => json!([
+                        {"BookID": "B9", "Status": "Skipped", "AudioStatus": "Have"}
+                    ]),
+                    q if q.starts_with("cmd=getAllBooks&") => json!([]),
+                    _ => return None,
+                };
+                Some((200, body.to_string()))
+            },
+            || {
+                let books = block(tools::parity_books(&ll(), false)).unwrap();
+                got = parity::parity(books, false);
+            },
+        );
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].book.id, "B9");
+        assert_eq!(got[0].gap, parity::ParityGap::EbookMissing);
+    }
+
+    #[test]
     fn gateway_502_is_a_typed_upstream_error() {
         let mut err = None;
         serve(
