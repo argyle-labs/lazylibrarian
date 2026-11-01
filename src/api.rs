@@ -49,7 +49,7 @@ impl std::fmt::Display for UpstreamUnavailable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}: lazylibrarian upstream unavailable: returned HTTP {}; it is unavailable or timed out",
+            "{}: lazylibrarian upstream unavailable (HTTP {}): down or timed out",
             self.cmd, self.status
         )
     }
