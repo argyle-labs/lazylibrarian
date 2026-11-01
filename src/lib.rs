@@ -531,6 +531,48 @@ mod tests {
     }
 
     #[test]
+    fn books_list_refuses_unbounded_call() {
+        let calls = serve(
+            |_| Some((200, "[]".into())),
+            || {
+                let args = tools::BooksArgs {
+                    name: "ll".into(),
+                    status: None,
+                    audio_status: None,
+                    author_id: Some("A1".into()),
+                    limit: None,
+                };
+                let err = block(tools::list_books(&ll(), &args))
+                    .unwrap_err()
+                    .to_string();
+                assert!(err.contains("--status"), "{err}");
+                for (status, _) in parity::STATUSES {
+                    assert!(err.contains(status), "{err}");
+                }
+            },
+        );
+        assert!(calls.is_empty(), "{calls:?}");
+    }
+
+    #[test]
+    fn books_list_limit_alone_is_bounded() {
+        let calls = serve(
+            |_| Some((200, "[]".into())),
+            || {
+                let args = tools::BooksArgs {
+                    name: "ll".into(),
+                    status: None,
+                    audio_status: None,
+                    author_id: None,
+                    limit: Some(10),
+                };
+                block(tools::list_books(&ll(), &args)).unwrap();
+            },
+        );
+        assert_eq!(calls, vec!["cmd=getAllBooks&limit=10"]);
+    }
+
+    #[test]
     fn parity_queries_non_skipped_statuses_per_format_and_dedupes() {
         let mut got = Vec::new();
         let calls = serve(

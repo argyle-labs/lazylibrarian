@@ -101,6 +101,14 @@ pub async fn list_books(ll: &Ll, args: &BooksArgs) -> Result<Vec<Book>> {
     if let Some(id) = &args.author_id {
         check_id(id)?;
     }
+    if args.status.is_none() && args.audio_status.is_none() && args.limit.is_none() {
+        let statuses: Vec<&str> = parity::STATUSES.iter().map(|(s, _)| *s).collect();
+        bail!(
+            "pass --status, --audio-status or --limit; an unfiltered getAllBooks is unbounded \
+             (statuses: {}, Skipped)",
+            statuses.join(", ")
+        );
+    }
     let mut params = Vec::new();
     if let Some(s) = &args.status {
         params.push(("status", s.as_str()));
@@ -120,7 +128,7 @@ pub async fn list_books(ll: &Ll, args: &BooksArgs) -> Result<Vec<Book>> {
 }
 
 /// List books with ebook and audiobook status, ISBN, author, language and
-/// publication date (`getAllBooks`).
+/// publication date (`getAllBooks`). Requires a status, audio status or limit.
 #[orca_tool(domain = "lazylibrarian", verb = "books.list", role = "read")]
 async fn lazylibrarian_books_list(args: BooksArgs, _ctx: &ToolCtx) -> Result<Vec<Book>> {
     list_books(&connect(&args.name).await?, &args).await
