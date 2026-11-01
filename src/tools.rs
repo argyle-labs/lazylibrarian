@@ -83,16 +83,16 @@ pub struct BooksArgs {
     /// Registered lazylibrarian endpoint name.
     #[arg(long)]
     pub name: String,
-    /// Only books with this ebook status (`Wanted`, `Open`, `Skipped`, ...).
+    /// Only books with this ebook status (`Wanted`, `Open`, `Skipped`, ...). At least one of status, audio_status, author_id or limit is required.
     #[arg(long)]
     pub status: Option<String>,
-    /// Only books with this audiobook status.
+    /// Only books with this audiobook status. At least one of status, audio_status, author_id or limit is required.
     #[arg(long)]
     pub audio_status: Option<String>,
-    /// Only books by this author id (`getAuthor`, bounded to that author).
+    /// Only books by this author id (`getAuthor`, bounded to that author). At least one of status, audio_status, author_id or limit is required.
     #[arg(long)]
     pub author_id: Option<String>,
-    /// Return at most this many books, applied after every filter.
+    /// Return at most this many books, applied after every filter. At least one of status, audio_status, author_id or limit is required.
     #[arg(long)]
     pub limit: Option<u32>,
 }
@@ -117,8 +117,8 @@ pub async fn list_books(ll: &Ll, args: &BooksArgs) -> Result<Vec<Book>> {
     if args.status.is_none() && args.audio_status.is_none() && args.limit.is_none() {
         let statuses: Vec<&str> = parity::STATUSES.iter().map(|(s, _)| *s).collect();
         bail!(
-            "pass --status, --audio-status, --author-id or --limit; an unfiltered getAllBooks is \
-             unbounded (statuses: {}, Skipped)",
+            "pass status (--status), audio_status (--audio-status), author_id (--author-id) or \
+             limit (--limit); an unfiltered getAllBooks is unbounded (statuses: {}, Skipped)",
             statuses.join(", ")
         );
     }

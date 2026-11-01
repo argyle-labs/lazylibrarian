@@ -577,8 +577,14 @@ mod tests {
                 let err = block(tools::list_books(&ll(), &args))
                     .unwrap_err()
                     .to_string();
-                assert!(err.contains("--status"), "{err}");
-                assert!(err.contains("--author-id"), "{err}");
+                for name in [
+                    "status (--status)",
+                    "audio_status (--audio-status)",
+                    "author_id (--author-id)",
+                    "limit (--limit)",
+                ] {
+                    assert!(err.contains(name), "{err}");
+                }
                 for (status, _) in parity::STATUSES {
                     assert!(err.contains(status), "{err}");
                 }
