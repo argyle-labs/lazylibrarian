@@ -141,8 +141,32 @@ pub struct ParityArgs {
 /// format is missing. Input for the ebook and audiobook parity report.
 #[orca_tool(domain = "lazylibrarian", verb = "parity.list", role = "read")]
 async fn lazylibrarian_parity_list(args: ParityArgs, _ctx: &ToolCtx) -> Result<Vec<ParityRow>> {
-    let books = connect(&args.name).await?.books(&[]).await?;
+    let books = parity_books(&connect(&args.name).await?, args.include_ignored).await?;
     Ok(parity::parity(books, args.include_ignored))
+}
+
+/// Statuses outside the `Skipped` availability bucket. A parity gap needs at
+/// least one format in one of these, so querying each per format covers every
+/// gap without pulling the Skipped/Skipped bulk of a large library.
+const PARITY_STATUSES: &[&str] = &["Open", "Have", "Wanted", "Snatched", "Matched"];
+
+pub async fn parity_books(ll: &Ll, include_ignored: bool) -> Result<Vec<Book>> {
+    let mut statuses = PARITY_STATUSES.to_vec();
+    if include_ignored {
+        statuses.push("Ignored");
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut books = Vec::new();
+    for key in ["status", "audiostatus"] {
+        for status in &statuses {
+            for book in ll.books(&[(key, status)]).await? {
+                if seen.insert(book.id.clone()) {
+                    books.push(book);
+                }
+            }
+        }
+    }
+    Ok(books)
 }
 
 #[orca_struct(args)]
