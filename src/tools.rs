@@ -100,7 +100,7 @@ pub struct BooksArgs {
 fn filter_author_books(books: Vec<Book>, args: &BooksArgs) -> Vec<Book> {
     let matches = |want: &Option<String>, have: &Option<String>| {
         want.as_deref()
-            .is_none_or(|w| have.as_deref().is_some_and(|h| h.eq_ignore_ascii_case(w)))
+            .is_none_or(|w| have.as_deref().is_some_and(|h| h == w))
     };
     books
         .into_iter()
@@ -526,13 +526,19 @@ mod tests {
                 .collect()
         };
         assert_eq!(ids(&books_args(None, None, None)).len(), 4);
+        assert_eq!(ids(&books_args(Some("Open"), None, None)), ["B2", "B4"]);
+        assert_eq!(ids(&books_args(Some("open"), None, None)), ["B3"]);
         assert_eq!(
-            ids(&books_args(Some("Open"), None, None)),
-            ["B2", "B3", "B4"]
+            ids(&books_args(Some("OPEN"), None, None)),
+            Vec::<String>::new()
         );
-        assert_eq!(ids(&books_args(Some("Open"), None, Some(2))), ["B2", "B3"]);
+        assert_eq!(ids(&books_args(Some("Open"), None, Some(1))), ["B2"]);
         assert_eq!(ids(&books_args(None, Some("Wanted"), None)), ["B1", "B3"]);
-        assert_eq!(ids(&books_args(Some("Open"), Some("Wanted"), None)), ["B3"]);
+        assert_eq!(
+            ids(&books_args(None, Some("wanted"), None)),
+            Vec::<String>::new()
+        );
+        assert_eq!(ids(&books_args(Some("open"), Some("Wanted"), None)), ["B3"]);
         assert_eq!(ids(&books_args(None, None, Some(1))), ["B1"]);
     }
 

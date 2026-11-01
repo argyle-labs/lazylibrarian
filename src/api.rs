@@ -155,7 +155,7 @@ impl Ll {
         let v = self
             .call_with("getAuthor", &[("id", author_id)], Some(ALL_BOOKS_MAX_BODY))
             .await?;
-        Ok(parse_author_books(&v))
+        parse_author_books(&v, author_id)
     }
 
     pub async fn find_books(&self, name: &str) -> Result<Vec<Book>> {
@@ -320,12 +320,15 @@ pub fn parse_book(row: &Value) -> Book {
 
 /// `getAuthor` answers `{"author": [row], "books": [rows]}`; its book rows come
 /// from the bare `books` table, so the author name is taken from the author row.
-pub fn parse_author_books(v: &Value) -> Vec<Book> {
-    let author = v
-        .get("author")
-        .map(|a| a.as_array().and_then(|r| r.first()).unwrap_or(a))
-        .and_then(|row| opt_str(field(row, "AuthorName")));
-    v.get("books")
+pub fn parse_author_books(v: &Value, author_id: &str) -> Result<Vec<Book>> {
+    let row = match v.get("author") {
+        Some(Value::Array(r)) => r.first(),
+        Some(o @ Value::Object(m)) if !m.is_empty() => Some(o),
+        _ => None,
+    }
+    .ok_or_else(|| anyhow!("getAuthor: no author with id {author_id}"))?;
+    let author = opt_str(field(row, "AuthorName"));
+    Ok(v.get("books")
         .map(rows)
         .unwrap_or(&[])
         .iter()
@@ -336,7 +339,7 @@ pub fn parse_author_books(v: &Value) -> Vec<Book> {
             }
             b
         })
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -345,17 +348,40 @@ mod tests {
 
     #[test]
     fn author_books_decode_getauthor_and_carry_author_name() {
-        let books = parse_author_books(&json!({
-            "author": [{"AuthorID": "A1", "AuthorName": "Brandon Sanderson"}],
-            "books": [
-                {"BookID": "B1", "BookName": "Elantris", "AuthorID": "A1", "Status": "Open"},
-                {"BookID": "B2", "BookName": "Warbreaker", "AuthorID": "A1", "AudioStatus": "Wanted"}
-            ]
-        }));
+        let books = parse_author_books(
+            &json!({
+                "author": [{"AuthorID": "A1", "AuthorName": "Brandon Sanderson"}],
+                "books": [
+                    {"BookID": "B1", "BookName": "Elantris", "AuthorID": "A1", "Status": "Open"},
+                    {"BookID": "B2", "BookName": "Warbreaker", "AuthorID": "A1", "AudioStatus": "Wanted"}
+                ]
+            }),
+            "A1",
+        )
+        .unwrap();
         assert_eq!(books.len(), 2);
         assert_eq!(books[0].author.as_deref(), Some("Brandon Sanderson"));
         assert_eq!(books[1].audio_status.as_deref(), Some("Wanted"));
-        assert!(parse_author_books(&json!({"author": [], "books": []})).is_empty());
+    }
+
+    #[test]
+    fn author_books_unknown_id_is_an_error() {
+        for v in [
+            json!({"author": [], "books": []}),
+            json!({"author": {}, "books": []}),
+            json!({"books": []}),
+        ] {
+            let err = parse_author_books(&v, "X9").unwrap_err().to_string();
+            assert_eq!(err, "getAuthor: no author with id X9");
+        }
+    }
+
+    #[test]
+    fn author_books_known_author_without_books_is_empty() {
+        let v = json!({"author": [{"AuthorID": "A1", "AuthorName": "N"}], "books": []});
+        assert!(parse_author_books(&v, "A1").unwrap().is_empty());
+        let v = json!({"author": {"AuthorID": "A1", "AuthorName": "N"}});
+        assert!(parse_author_books(&v, "A1").unwrap().is_empty());
     }
 
     #[test]
