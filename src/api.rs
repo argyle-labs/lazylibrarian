@@ -6,6 +6,7 @@ use plugin_toolkit::reqwest::Client as HttpClient;
 use plugin_toolkit::serde_json::{self, Value};
 
 const ALL_BOOKS_MAX_BODY: u64 = 64 * 1024 * 1024;
+const ALL_BOOKS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 pub struct Ll {
     base_url: String,
@@ -84,13 +85,20 @@ impl Ll {
             |r, (k, v)| r.query(&QueryParam::new(k, v)),
         );
         let req = match max_body {
-            Some(bytes) => req.max_body(bytes),
+            Some(bytes) => req.max_body(bytes).timeout(ALL_BOOKS_TIMEOUT),
             None => req,
         };
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| anyhow!("{cmd}: {}", self.excerpt(&e.to_string())))?;
+        let resp = req.send().await.map_err(|e| {
+            let msg = self.excerpt(&e.to_string());
+            if max_body.is_some() && msg.contains("decoding response body") {
+                anyhow!(
+                    "{cmd}: body read interrupted (timeout, connection reset, or upstream \
+                     closed early) ({msg}); narrow the call with status, audio_status or limit"
+                )
+            } else {
+                anyhow!("{cmd}: {msg}")
+            }
+        })?;
         let status = resp.status();
         if matches!(status.as_u16(), 502..=504) {
             return Err(UpstreamUnavailable {

@@ -355,6 +355,54 @@ mod tests {
     }
 
     #[test]
+    fn bulk_reads_extend_the_request_timeout() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        plugin_toolkit::capsink::with_cap_sink(
+            Box::new(move |_cap: &str, req: &str| {
+                let req: serde_json::Value = serde_json::from_str(req).unwrap();
+                log.lock().unwrap().push(req["timeout_ms"].clone());
+                Ok(json!({"status": 200, "headers": [], "body": b"[]".to_vec()}).to_string())
+            }),
+            || {
+                block(ll().books(&[])).unwrap();
+                block(ll().authors()).unwrap();
+            },
+        );
+        assert_eq!(*seen.lock().unwrap(), vec![json!(300_000), json!(null)]);
+    }
+
+    #[test]
+    fn interrupted_bulk_body_names_the_causes() {
+        let mut err = None;
+        plugin_toolkit::capsink::with_cap_sink(
+            Box::new(|_cap: &str, _req: &str| {
+                Err("http.request: request failed: error decoding response body".into())
+            }),
+            || err = block(ll().books(&[])).err(),
+        );
+        let msg = err.unwrap().to_string();
+        assert!(msg.contains("body read interrupted"), "{msg}");
+        assert!(msg.contains("connection reset"), "{msg}");
+        assert!(msg.contains("limit"), "{msg}");
+        assert!(!msg.contains("MiB"), "{msg}");
+    }
+
+    #[test]
+    fn non_bulk_decode_errors_are_not_rewritten() {
+        let mut err = None;
+        plugin_toolkit::capsink::with_cap_sink(
+            Box::new(|_cap: &str, _req: &str| {
+                Err("http.request: request failed: error decoding response body".into())
+            }),
+            || err = block(ll().authors()).err(),
+        );
+        let msg = err.unwrap().to_string();
+        assert!(msg.contains("error decoding response body"), "{msg}");
+        assert!(!msg.contains("body read interrupted"), "{msg}");
+    }
+
+    #[test]
     fn find_book_percent_encodes_the_name() {
         let calls = serve(
             |_| {
@@ -947,5 +995,43 @@ mod tests {
             .external_ids
             .iter()
             .any(|e| e.source == "isbn" && e.id == "9780765326355"));
+    }
+}
+
+#[cfg(test)]
+mod row_tolerance_tests {
+    use super::tests::{block, ll, serve};
+    use plugin_toolkit::serde_json::{self, json};
+
+    #[test]
+    fn books_tolerate_odd_rows_and_a_large_list() {
+        let mut rows = vec![
+            json!({"BookID": "GB1", "BookName": "Ölüm Oyunu", "BookSub": null, "BookDate": "0000",
+                   "BookRate": null, "BookDesc": null, "Status": "Open"}),
+            json!({"BookID": 4711, "BookName": "吾輩は猫である", "BookRate": "x", "BookDate": 1999,
+                   "AuthorName": "Нейтан", "BookDesc": {"a": [1]}, "Status": null}),
+            json!(null),
+            json!("stray"),
+            json!([1, 2]),
+        ];
+        rows.extend((0..8000).map(|i| {
+            json!({"BookID": format!("B{i}"), "BookName": format!("Книга {i}"), "Status": "Skipped"})
+        }));
+        let body = serde_json::Value::Array(rows).to_string();
+        let mut got = Vec::new();
+        serve(
+            move |_| Some((200, body.clone())),
+            || got = block(ll().books(&[])).unwrap(),
+        );
+        assert_eq!(got.len(), 8005);
+        assert_eq!(got[0].title, "Ölüm Oyunu");
+        assert_eq!(got[0].subtitle, None);
+        assert_eq!(got[0].published.as_deref(), Some("0000"));
+        assert_eq!(got[1].id, "4711");
+        assert_eq!(got[1].title, "吾輩は猫である");
+        assert_eq!(got[1].published.as_deref(), Some("1999"));
+        assert_eq!(got[1].ebook_status, None);
+        assert_eq!(got[4].id, "");
+        assert_eq!(got[8004].title, "Книга 7999");
     }
 }
